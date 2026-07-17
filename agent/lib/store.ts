@@ -1,5 +1,6 @@
-export type DropoutRisk = "low" | "medium" | "high";
+import { defineState } from "eve/context";
 
+export type DropoutRisk = "low" | "medium" | "high";
 export type OnboardingStatus = "not_started" | "in_progress" | "complete";
 
 export type CheckIn = {
@@ -41,43 +42,20 @@ export type Patient = {
   sideEffectHistory: string[];
   checkins: CheckIn[];
   dropoutRisk: DropoutRisk;
-  escalations: string[];
-  lastMealVisualUrl?: string;
-  lastReplyCallback?: string;
+  escalations: EscalationCard[];
   conversationId?: string;
   createdAt: string;
   updatedAt: string;
 };
 
-type Store = {
-  patients: Record<string, Patient>;
-  escalations: Record<string, EscalationCard>;
-};
-
-const globalKey = "__steadfast_store__";
-
-function emptyStore(): Store {
-  return { patients: {}, escalations: {} };
-}
-
-function getStore(): Store {
-  const g = globalThis as typeof globalThis & { [globalKey]?: Store };
-  if (!g[globalKey]) g[globalKey] = emptyStore();
-  return g[globalKey];
-}
-
 function now() {
   return new Date().toISOString();
 }
 
-/** Get or create a blank patient record — no seeded persona. */
-export function getPatient(phoneNumber: string): Patient {
-  const store = getStore();
-  const existing = store.patients[phoneNumber];
-  if (existing) return existing;
-
-  const created: Patient = {
-    phoneNumber,
+function blankPatient(): Patient {
+  const ts = now();
+  return {
+    phoneNumber: "",
     onboardingStatus: "not_started",
     name: null,
     week: null,
@@ -90,34 +68,64 @@ export function getPatient(phoneNumber: string): Patient {
     checkins: [],
     dropoutRisk: "low",
     escalations: [],
-    createdAt: now(),
-    updatedAt: now(),
+    createdAt: ts,
+    updatedAt: ts,
   };
-  store.patients[phoneNumber] = created;
-  return created;
 }
 
-export function listPatients(): Patient[] {
-  return Object.values(getStore().patients);
+/**
+ * Durable per-WhatsApp-session patient record (Eve workflow state).
+ * Sessions are keyed by phone via the Wassist channel continuation token.
+ */
+export const patientState = defineState("steadfast.patient", blankPatient);
+
+export function getPatient(phoneNumber: string): Patient {
+  const current = patientState.get();
+  if (!current.phoneNumber) {
+    patientState.update(() => ({
+      ...blankPatient(),
+      phoneNumber,
+      createdAt: now(),
+      updatedAt: now(),
+    }));
+    return patientState.get();
+  }
+  if (current.phoneNumber !== phoneNumber) {
+    patientState.update(() => ({
+      ...blankPatient(),
+      phoneNumber,
+      createdAt: now(),
+      updatedAt: now(),
+    }));
+    return patientState.get();
+  }
+  return current;
 }
 
 export function updatePatient(phoneNumber: string, patch: Partial<Patient>): Patient {
-  const patient = getPatient(phoneNumber);
-  Object.assign(patient, patch, { updatedAt: now() });
-  return patient;
+  getPatient(phoneNumber);
+  patientState.update((p) => ({
+    ...p,
+    ...patch,
+    phoneNumber,
+    updatedAt: now(),
+  }));
+  return patientState.get();
 }
 
 export function addCheckIn(phoneNumber: string, checkin: CheckIn): Patient {
-  const patient = getPatient(phoneNumber);
-  patient.checkins.push(checkin);
-  patient.updatedAt = now();
-  return patient;
+  getPatient(phoneNumber);
+  patientState.update((p) => ({
+    ...p,
+    checkins: [...p.checkins, checkin],
+    updatedAt: now(),
+  }));
+  return patientState.get();
 }
 
 export function createEscalation(
   input: Omit<EscalationCard, "id" | "createdAt" | "updatedAt" | "status">,
 ): EscalationCard {
-  const store = getStore();
   const ts = now();
   const card: EscalationCard = {
     ...input,
@@ -126,19 +134,13 @@ export function createEscalation(
     createdAt: ts,
     updatedAt: ts,
   };
-  store.escalations[card.id] = card;
-  getPatient(input.phoneNumber).escalations.push(card.id);
+  getPatient(input.phoneNumber);
+  patientState.update((p) => ({
+    ...p,
+    escalations: [...p.escalations, card],
+    updatedAt: ts,
+  }));
   return card;
-}
-
-export function listEscalations(): EscalationCard[] {
-  return Object.values(getStore().escalations).sort((a, b) =>
-    a.createdAt < b.createdAt ? 1 : -1,
-  );
-}
-
-export function getEscalation(id: string): EscalationCard | undefined {
-  return getStore().escalations[id];
 }
 
 export function computeRiskScore(patient: Patient): DropoutRisk {
@@ -155,7 +157,6 @@ export function computeRiskScore(patient: Patient): DropoutRisk {
   return "low";
 }
 
-/** Fields still needed before weekly coaching can start. */
 export function missingOnboardingFields(patient: Patient): string[] {
   const missing: string[] = [];
   if (!patient.name) missing.push("name");

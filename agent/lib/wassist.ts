@@ -6,53 +6,80 @@ export type WassistWebhookPayload = {
   conversation_id?: string | null;
 };
 
-export type WassistOutbound =
-  | { type: "message"; content: string }
-  | { type: "image"; content: string; url: string }
-  | { content: string; imageUrl?: string };
+export type QuickReplyButton = {
+  type: "quick_reply";
+  text: string;
+  quickReplyId: string;
+};
 
-/**
- * Fast-path webhook response (must return <5s). Prefer this when the reply is ready.
- */
-export function webhookMessage(content: string) {
-  return { type: "message" as const, content };
+export type WassistOutbound = {
+  content: string;
+  imageUrl?: string;
+  buttons?: QuickReplyButton[];
+};
+
+function buildBody(payload: WassistOutbound) {
+  if (payload.buttons?.length || payload.imageUrl) {
+    return {
+      type: "unified",
+      unified: {
+        text: payload.content,
+        ...(payload.imageUrl
+          ? { media: { url: payload.imageUrl } }
+          : {}),
+        ...(payload.buttons?.length
+          ? {
+              buttons: payload.buttons.slice(0, 3).map((b) => ({
+                type: "quick_reply" as const,
+                text: b.text.slice(0, 20),
+                quickReplyId: b.quickReplyId.slice(0, 200),
+              })),
+            }
+          : {}),
+      },
+    };
+  }
+  return { type: "message", content: payload.content };
 }
 
 /**
- * Deliver via reply_callback when work took longer than the webhook window.
- * Wassist accepts flexible JSON; we send text and optional image URL.
+ * Deliver via reply_callback (valid ~24h from user's last message).
  */
 export async function sendViaCallback(
   replyCallback: string,
   payload: WassistOutbound,
 ): Promise<void> {
-  const body =
-    "imageUrl" in payload && payload.imageUrl
-      ? { content: payload.content, image: payload.imageUrl }
-      : "url" in payload && payload.type === "image"
-        ? { content: payload.content, image: payload.url }
-        : { content: "content" in payload ? payload.content : "" };
-
   const res = await fetch(replyCallback, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildBody(payload)),
   });
 
   if (!res.ok) {
+    // Fallback: plain content if unified shape is rejected by sandbox.
+    if (payload.buttons?.length || payload.imageUrl) {
+      const fallback = await fetch(replyCallback, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: payload.content,
+          ...(payload.imageUrl ? { image: payload.imageUrl } : {}),
+        }),
+      });
+      if (fallback.ok) return;
+      const text = await fallback.text().catch(() => "");
+      throw new Error(`Wassist callback failed (${fallback.status}): ${text}`);
+    }
     const text = await res.text().catch(() => "");
     throw new Error(`Wassist callback failed (${res.status}): ${text}`);
   }
 }
 
-/**
- * Proactive / clinician-approved send via Conversations REST API.
- * Requires WASSIST_API_KEY and a conversation id.
- */
 export async function sendViaRest(opts: {
   conversationId: string;
   content: string;
   imageUrl?: string;
+  buttons?: QuickReplyButton[];
 }): Promise<void> {
   const apiKey = process.env.WASSIST_API_KEY;
   if (!apiKey) {
@@ -60,24 +87,59 @@ export async function sendViaRest(opts: {
   }
 
   const base = process.env.WASSIST_API_BASE ?? "https://backend.wassist.app/api/v1";
-  const res = await fetch(
-    `${base}/conversations/${opts.conversationId}/messages`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey,
-      },
-      body: JSON.stringify(
-        opts.imageUrl
-          ? { content: opts.content, image: opts.imageUrl }
-          : { content: opts.content },
-      ),
+  const body =
+    opts.buttons?.length || opts.imageUrl
+      ? {
+          type: "unified",
+          unified: {
+            text: opts.content,
+            ...(opts.imageUrl ? { media: { url: opts.imageUrl } } : {}),
+            ...(opts.buttons?.length
+              ? {
+                  buttons: opts.buttons.slice(0, 3).map((b) => ({
+                    type: "quick_reply" as const,
+                    text: b.text.slice(0, 20),
+                    quickReplyId: b.quickReplyId.slice(0, 200),
+                  })),
+                }
+              : {}),
+          },
+        }
+      : { type: "text", text: { body: opts.content } };
+
+  const res = await fetch(`${base}/conversations/${opts.conversationId}/messages/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": apiKey,
     },
-  );
+    body: JSON.stringify(body),
+  });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Wassist REST send failed (${res.status}): ${text}`);
   }
+}
+
+export type WassistConversation = {
+  id: string;
+  number?: string;
+  phone_number?: string;
+  status?: string;
+};
+
+export async function listConversations(): Promise<WassistConversation[]> {
+  const apiKey = process.env.WASSIST_API_KEY;
+  if (!apiKey) return [];
+  const base = process.env.WASSIST_API_BASE ?? "https://backend.wassist.app/api/v1";
+  const res = await fetch(`${base}/conversations/`, {
+    headers: { "X-API-Key": apiKey },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Wassist list conversations failed (${res.status}): ${text}`);
+  }
+  const json = (await res.json()) as WassistConversation[] | { results?: WassistConversation[] };
+  return Array.isArray(json) ? json : (json.results ?? []);
 }

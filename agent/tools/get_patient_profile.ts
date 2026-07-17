@@ -1,17 +1,22 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { getPatient, missingOnboardingFields } from "#lib/store";
+import { getPatient, missingOnboardingFields, updatePatient } from "#lib/store";
 
 export default defineTool({
   description:
-    "Load the patient's profile and onboarding status. Call at the start of every turn before coaching.",
+    "Load the patient's profile and onboarding status. Call at the start of every turn before coaching or onboarding.",
   inputSchema: z.object({
-    phoneNumber: z
+    phoneNumber: z.string().describe("WhatsApp phone in E.164 form"),
+    conversationId: z
       .string()
-      .describe("Patient WhatsApp phone number in E.164 form"),
+      .optional()
+      .describe("Wassist conversation id if present in the user message"),
   }),
-  async execute({ phoneNumber }) {
-    const p = getPatient(phoneNumber);
+  async execute({ phoneNumber, conversationId }) {
+    let p = getPatient(phoneNumber);
+    if (conversationId && p.conversationId !== conversationId) {
+      p = updatePatient(phoneNumber, { conversationId });
+    }
     const missing = missingOnboardingFields(p);
     return {
       phoneNumber: p.phoneNumber,
@@ -28,7 +33,7 @@ export default defineTool({
       sideEffectHistory: p.sideEffectHistory,
       dropoutRisk: p.dropoutRisk,
       recentCheckins: p.checkins.slice(-3),
-      openEscalations: p.escalations.length,
+      openEscalations: p.escalations.filter((e) => e.status === "open").length,
     };
   },
 });

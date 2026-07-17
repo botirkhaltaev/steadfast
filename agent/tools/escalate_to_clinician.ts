@@ -4,14 +4,12 @@ import { createEscalation, getPatient } from "#lib/store";
 
 export default defineTool({
   description:
-    "Escalate a red-flag symptom to the human clinical team. Creates a prioritized escalation record. Call immediately on severe abdominal pain, persistent vomiting, chest pain, allergic reaction, self-harm ideation, or similar.",
+    "Escalate a red-flag symptom to the human clinical team. Call immediately on severe abdominal pain, persistent vomiting, chest pain, allergic reaction, self-harm ideation, or similar.",
   inputSchema: z.object({
     phoneNumber: z.string(),
-    redFlag: z.string().describe("Short label for the red flag"),
-    summary: z
-      .string()
-      .describe("Clinician-facing summary of what the patient reported and context"),
-    transcriptSnippet: z.string().describe("Key patient quotes"),
+    redFlag: z.string(),
+    summary: z.string(),
+    transcriptSnippet: z.string(),
     urgency: z.enum(["routine", "urgent", "emergency"]).default("urgent"),
   }),
   async execute({ phoneNumber, redFlag, summary, transcriptSnippet, urgency }) {

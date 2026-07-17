@@ -1,11 +1,11 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { generateMealUpgradeImage } from "#lib/runware";
-import { getPatient, updatePatient } from "#lib/store";
+import { getPatient } from "#lib/store";
 
 export default defineTool({
   description:
-    "Generate a personalized higher-protein version of the patient's meal plate via Runware. Requires completed onboarding protein target and RUNWARE_API_KEY.",
+    "Generate a personalized higher-protein meal visual via Runware. The image attaches to your next WhatsApp reply. Requires onboarding protein target + RUNWARE_API_KEY.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     mealDescription: z.string(),
@@ -26,11 +26,11 @@ export default defineTool({
       diet: patient.diet,
     });
 
-    updatePatient(phoneNumber, { lastMealVisualUrl: url });
     return {
       imageUrl: url,
       caption: `Here's your plate upgraded toward ~${patient.proteinTargetG}g protein.`,
       generated: true,
+      note: "Image attaches to your next WhatsApp message this turn.",
     };
   },
 });

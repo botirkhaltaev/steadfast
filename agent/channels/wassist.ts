@@ -1,13 +1,20 @@
 import { defineChannel, GET, POST } from "eve/channels";
-import { getPatient, listEscalations, updatePatient } from "#lib/store";
-import {
-  sendViaCallback,
-  type WassistWebhookPayload,
-} from "#lib/wassist";
+import { toolResultFrom } from "eve/tools";
+import { sendViaCallback, type WassistWebhookPayload } from "#lib/wassist";
+import offerChoices from "../tools/offer_choices";
+import generateMealVisual from "../tools/generate_meal_visual";
+
+type QuickReplyButton = {
+  type: "quick_reply";
+  text: string;
+  quickReplyId: string;
+};
 
 type WassistState = {
   phoneNumber: string | null;
   replyCallback: string | null;
+  pendingButtons: QuickReplyButton[] | null;
+  pendingImageUrl: string | null;
 };
 
 type WassistTarget = {
@@ -27,6 +34,8 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
   state: {
     phoneNumber: null,
     replyCallback: null,
+    pendingButtons: null,
+    pendingImageUrl: null,
   },
 
   context(state) {
@@ -42,25 +51,20 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
 
   async receive(input, { send }) {
     const phoneNumber = input.target.phoneNumber;
-    const patient = getPatient(phoneNumber);
     return send(input.message, {
       auth: input.auth,
       continuationToken: tokenFor(phoneNumber),
       state: {
         phoneNumber,
-        replyCallback: patient.lastReplyCallback ?? null,
+        replyCallback: null,
+        pendingButtons: null,
+        pendingImageUrl: null,
       },
-      title: patient.name
-        ? `WhatsApp ${patient.name}`
-        : `WhatsApp ${phoneNumber}`,
+      title: `WhatsApp ${phoneNumber}`,
     });
   },
 
   routes: [
-    /**
-     * Wassist BYOA webhook — WhatsApp is the only UI.
-     * POST /eve/v1/wassist/webhook
-     */
     POST("/webhook", async (req, { send, waitUntil }) => {
       const body = (await req.json()) as WassistWebhookPayload;
       const phoneNumber = body.phone_number;
@@ -71,15 +75,12 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
       const text = (body.message ?? "").trim();
       const imageUrl = body.image ?? null;
       const replyCallback = body.reply_callback ?? null;
-      const patient = getPatient(phoneNumber);
-
-      updatePatient(phoneNumber, {
-        lastReplyCallback: replyCallback ?? undefined,
-        conversationId: body.conversation_id ?? undefined,
-      });
 
       const preface = [
         `[patient_phone=${phoneNumber}]`,
+        body.conversation_id
+          ? `[conversation_id=${body.conversation_id}]`
+          : null,
         imageUrl ? `[meal_image_url=${imageUrl}]` : null,
         text || (imageUrl ? "I sent a photo of my meal." : "Hi"),
       ]
@@ -106,16 +107,17 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
             attributes: {
               phoneNumber,
               replyCallback: replyCallback ?? "",
+              conversationId: body.conversation_id ?? "",
             },
           },
           continuationToken: tokenFor(phoneNumber),
           state: {
             phoneNumber,
             replyCallback,
+            pendingButtons: null,
+            pendingImageUrl: null,
           },
-          title: patient.name
-            ? `WhatsApp ${patient.name}`
-            : `WhatsApp ${phoneNumber}`,
+          title: `WhatsApp ${phoneNumber}`,
         }).then(() => undefined),
       );
 
@@ -129,13 +131,21 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         webhook: "/eve/v1/wassist/webhook",
       }),
     ),
-
-    GET("/escalations", async () =>
-      Response.json({ escalations: listEscalations() }),
-    ),
   ],
 
   events: {
+    "action.result"(eventData, channel) {
+      const choices = toolResultFrom(eventData.result, offerChoices);
+      if (choices?.output?.buttons?.length) {
+        channel.state.pendingButtons = choices.output.buttons;
+      }
+
+      const meal = toolResultFrom(eventData.result, generateMealVisual);
+      if (meal?.output?.imageUrl) {
+        channel.state.pendingImageUrl = meal.output.imageUrl;
+      }
+    },
+
     async "message.completed"(eventData, channel) {
       if (eventData.finishReason === "tool-calls") return;
 
@@ -145,30 +155,25 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
           : "";
       if (!text) return;
 
-      const phoneNumber = channel.state.phoneNumber;
-      const patient = phoneNumber ? getPatient(phoneNumber) : null;
-      const replyCallback =
-        channel.state.replyCallback ?? patient?.lastReplyCallback ?? null;
+      const replyCallback = channel.state.replyCallback;
       if (!replyCallback) {
         console.warn("[wassist] no reply_callback; dropping outbound", {
-          phoneNumber,
+          phoneNumber: channel.state.phoneNumber,
         });
         return;
       }
 
+      const buttons = channel.state.pendingButtons;
+      const imageUrl = channel.state.pendingImageUrl;
+      channel.state.pendingButtons = null;
+      channel.state.pendingImageUrl = null;
+
       try {
-        const imageUrl = patient?.lastMealVisualUrl;
-        if (imageUrl && /protein|plate|meal|lunch|upgrade/i.test(text)) {
-          await sendViaCallback(replyCallback, {
-            content: text,
-            imageUrl,
-          });
-          if (phoneNumber) {
-            updatePatient(phoneNumber, { lastMealVisualUrl: undefined });
-          }
-        } else {
-          await sendViaCallback(replyCallback, { content: text });
-        }
+        await sendViaCallback(replyCallback, {
+          content: text,
+          ...(buttons?.length ? { buttons } : {}),
+          ...(imageUrl ? { imageUrl } : {}),
+        });
       } catch (err) {
         console.error("[wassist] reply_callback failed", err);
       }

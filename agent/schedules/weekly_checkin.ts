@@ -1,10 +1,9 @@
 import { defineSchedule } from "eve/schedules";
 import wassist from "../channels/wassist";
-import { listPatients } from "#lib/store";
-import { sendViaRest } from "#lib/wassist";
+import { listConversations, sendViaRest } from "#lib/wassist";
 
 /**
- * Proactive weekly check-in for onboarded patients with an active Wassist conversation.
+ * Proactive weekly check-in for active Wassist conversations.
  * Cron: Mondays 09:00 UTC
  */
 export default defineSchedule({
@@ -12,28 +11,36 @@ export default defineSchedule({
   async run({ receive, waitUntil, appAuth }) {
     if (!process.env.WASSIST_API_KEY) return;
 
-    for (const patient of listPatients()) {
-      if (patient.onboardingStatus !== "complete") continue;
-      if (!patient.conversationId || !patient.name) continue;
+    let conversations: Awaited<ReturnType<typeof listConversations>> = [];
+    try {
+      conversations = await listConversations();
+    } catch (err) {
+      console.error("[weekly_checkin] listConversations failed", err);
+      return;
+    }
 
-      const med = patient.medication ?? "your medication";
-      const message = `Hi ${patient.name} — week ${patient.week ?? "?"} check-in. How has ${med} been this week? Any side effects, missed doses, or questions?`;
+    for (const conv of conversations) {
+      const phone = conv.number ?? conv.phone_number;
+      if (!phone || !conv.id) continue;
+
+      const message =
+        "Hi — it's your Steadfast weekly check-in. How has your GLP-1 week been? Any side effects, missed doses, or questions?";
 
       waitUntil(
         sendViaRest({
-          conversationId: patient.conversationId,
+          conversationId: conv.id,
           content: message,
         })
           .then(() =>
             receive(wassist, {
-              message: `[system] Weekly check-in nudge delivered to ${patient.name} (${patient.phoneNumber}). Await their reply; do not message them again until they respond.`,
-              target: { phoneNumber: patient.phoneNumber },
+              message: `[system] Weekly check-in nudge delivered to ${phone}. Await their reply; do not message again until they respond.`,
+              target: { phoneNumber: phone },
               auth: appAuth,
             }),
           )
           .then(() => undefined)
           .catch((err) => {
-            console.error("[weekly_checkin] failed", patient.phoneNumber, err);
+            console.error("[weekly_checkin] failed", phone, err);
           }),
       );
     }

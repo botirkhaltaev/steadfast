@@ -1,51 +1,54 @@
 # Steadfast — GLP-1 Persistence Companion
 
-WhatsApp-native AI companion that keeps people on their GLP-1 programme: conversational onboarding, weekly check-ins, side-effect coaching, meal-photo protein support, dropout-risk awareness, and human escalation on red flags.
+WhatsApp-native AI companion that keeps people on their GLP-1 programme.
 
-**UI = WhatsApp.** No patient web app. Built with [Wassist](https://wassist.app) BYOA + [Vercel Eve](https://eve.dev).
+**UI = WhatsApp only.** Conversational onboarding, weekly check-ins, side-effect coaching, meal-photo protein support, quick-reply choices, dropout-risk awareness, and human escalation on red flags.
+
+Built with [Wassist](https://wassist.app) BYOA + [Vercel Eve](https://eve.dev).
 
 ## Why
 
 - 46.5% of T2D and 64.8% of non-diabetic patients discontinue GLP-1s within 12 months (*JAMA Netw Open* 2025, n=125,474); quitters regain ~⅔ of weight.
 - 25–40% of weight lost can be lean mass; real-world users often under-eat protein.
 - Health apps retain ~4% at 30 days — WhatsApp is where patients already live.
-- Supervision drives adherence (eMed’s model); AI makes that playbook scale.
 
 ## Architecture
 
 ```
-WhatsApp  ⇄  Wassist BYOA sandbox/number
+WhatsApp  ⇄  Wassist BYOA
                 │ POST /eve/v1/wassist/webhook
                 │ { message, image?, phone_number, reply_callback }
                 ▼
          Eve agent (Vercel)
-           instructions.md  — onboarding + coach + safety
-           tools/           — onboarding, check-in, vision, Runware, escalate
-           schedules/       — weekly check-in cron
+           instructions.md     — onboarding + coach + safety
+           defineState         — durable per-phone patient profile
+           tools/              — onboarding, choices, check-in, vision, Runware, escalate
+           schedules/          — weekly check-in cron
                 │
-                ▼ reply_callback / Conversations API
-         WhatsApp (patient)
+                ▼ reply_callback (text / quick replies / image)
+         WhatsApp
 ```
 
 ## Onboarding (in WhatsApp)
 
-New numbers start with empty profiles. The agent:
+New numbers start with an empty durable profile (no seeded personas).
 
-1. Introduces itself (not a doctor)
-2. Asks **one question at a time**: name → medication → dose → week → diet → protein target (+ optional motivation)
-3. Saves via `update_onboarding`
-4. Confirms a summary and explains the weekly ritual
+1. Welcome + disclose you're not a doctor  
+2. One question at a time: name → medication → dose → week → diet → protein target  
+3. Diet / protein use WhatsApp **quick-reply buttons** (`offer_choices`)  
+4. Saves via `update_onboarding` until complete  
+5. Confirms summary + explains the weekly ritual  
 
-Only then does weekly coaching / meal photos / risk scoring unlock.
+Coaching, meal vision, and risk scoring unlock only after onboarding completes.
 
 ## Stack
 
 | Piece | Role |
 | --- | --- |
-| Wassist BYOA | WhatsApp pipe, typing, media, 24h window |
-| Vercel Eve | Durable agent, tools, schedules, deploy |
+| Wassist BYOA | WhatsApp pipe, media, 24h window, quick replies |
+| Vercel Eve | Durable agent, tools, schedules, `defineState` |
 | OpenAI via AI Gateway | Coach + meal vision |
-| Runware FLUX | Personalized higher-protein meal visuals |
+| Runware FLUX | Higher-protein meal visuals |
 
 ## Setup
 
@@ -53,44 +56,44 @@ Requires **Node 24+**.
 
 ```bash
 cp .env.example .env
-# fill AI_GATEWAY_API_KEY (or OPENAI_API_KEY), WASSIST_API_KEY, RUNWARE_API_KEY
+# AI_GATEWAY_API_KEY or OPENAI_API_KEY, WASSIST_API_KEY, RUNWARE_API_KEY
 
 npm install
-npm run dev          # or: npx eve dev --no-ui
+npm run dev          # interactive: npm exec -- eve dev
+                     # headless:    npm exec -- eve dev --no-ui
 ```
 
 ### Wire Wassist
 
-1. Sign up at [wassist.app](https://wassist.app/login) (phone OTP).
-2. Create a **Bring Your Own Agent** with webhook:
+1. Sign up at [wassist.app](https://wassist.app/login).  
+2. Create **Bring Your Own Agent** with webhook:
 
    `https://<your-host>/eve/v1/wassist/webhook`
 
-3. Message the sandbox / test number — first messages run **onboarding**.
+3. Message the sandbox number — first turns run **onboarding**.
 
-Deploy:
+### Deploy
 
 ```bash
 npx eve deploy
-# or: vercel deploy
+# or: npx vercel --yes
 ```
 
-Health check: `GET /eve/v1/wassist/health`  
-Open escalations (ops JSON): `GET /eve/v1/wassist/escalations`
+Health: `GET /eve/v1/wassist/health`
 
-## Demo script (live WhatsApp)
+## Demo (live WhatsApp)
 
-1. New chat → onboarding questions → confirm profile  
-2. “Rough week, nauseous, skipped Tuesday” → empathy + coaching + `log_checkin`  
-3. Send lunch photo → protein estimate + Runware upgrade image  
-4. “Bad stomach pain since yesterday” → stop coaching → escalate  
+1. New chat → onboarding with quick replies → confirm profile  
+2. “Rough week, nauseous, skipped a dose” → coaching + check-in log  
+3. Lunch photo → protein estimate + Runware upgrade image  
+4. “Bad stomach pain” → stop coaching → escalate  
 
 ## Safety
 
-- Coaches adherence & nutrition only — never diagnoses or changes doses  
-- Red flags → immediate escalation tool + patient told a human is being connected  
-- Shell / web fetch / write tools disabled on the agent  
+- Adherence & nutrition only — never diagnoses or changes doses  
+- Red flags → `escalate_to_clinician` + patient told a human is being connected  
+- Shell / web / file built-ins disabled  
 
 ## Pitch close
 
-`$1,000/mo drug × ~50% churn wastes millions per employer cohort. Steadfast runs the supervision ritual where patients already are — WhatsApp — so the drug isn’t wasted.`
+`$1,000/mo drug × ~50% churn wastes millions per employer cohort. Steadfast runs the supervision ritual where patients already are — WhatsApp.`

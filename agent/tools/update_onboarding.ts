@@ -8,9 +8,10 @@ import {
 
 export default defineTool({
   description:
-    "Save onboarding answers collected over WhatsApp (name, medication, dose, week, diet, protein target, motivation). Call after each answer or batch when several arrive. Marks onboarding complete when all required fields are present.",
+    "Save onboarding answers from WhatsApp (name, medication, dose, week, diet, protein target, motivation). Call after each answer or batch when several arrive. Marks onboarding complete when all required fields are present.",
   inputSchema: z.object({
     phoneNumber: z.string(),
+    conversationId: z.string().optional(),
     name: z.string().min(1).optional(),
     medication: z
       .string()
@@ -21,24 +22,22 @@ export default defineTool({
     diet: z
       .string()
       .optional()
-      .describe("e.g. omnivore, vegetarian, vegan, no restrictions"),
+      .describe("e.g. omnivore, vegetarian, vegan, other"),
     proteinTargetG: z
       .number()
       .int()
       .min(40)
       .max(250)
       .optional()
-      .describe("Daily protein target in grams; suggest 90–120 if unsure"),
+      .describe("Daily protein target in grams"),
     motivation: z.string().optional(),
-    sideEffectNote: z
-      .string()
-      .optional()
-      .describe("Optional past side-effect note to append to history"),
+    sideEffectNote: z.string().optional(),
   }),
   async execute(input) {
     const patch: Parameters<typeof updatePatient>[1] = {
       onboardingStatus: "in_progress",
     };
+    if (input.conversationId) patch.conversationId = input.conversationId;
     if (input.name !== undefined) patch.name = input.name.trim();
     if (input.medication !== undefined) patch.medication = input.medication.trim();
     if (input.dose !== undefined) patch.dose = input.dose.trim();
