@@ -9,7 +9,7 @@ import { listMessages, sendMessage } from "#lib/wassist";
 
 /**
  * Demo clinician inbox API — no auth.
- * Next.js UI at web/ proxies /clinician/* here (or calls NEXT_PUBLIC_EVE_URL).
+ * Mounted under `/eve/v1/clinician/*` so withEve proxies it from Next.js.
  */
 function snapshot(card: QueuedEscalation) {
   return {
@@ -58,12 +58,12 @@ export default defineChannel({
     return {};
   },
   routes: [
-    GET("/clinician/escalations", async () => {
+    GET("/eve/v1/clinician/escalations", async () => {
       const escalations = listEscalations().map(snapshot);
       return Response.json({ escalations });
     }),
 
-    GET("/clinician/escalations/:id", async (_req, { params }) => {
+    GET("/eve/v1/clinician/escalations/:id", async (_req, { params }) => {
       const id = String(params.id ?? "");
       const card = getEscalation(id);
       if (!card) {
@@ -72,7 +72,7 @@ export default defineChannel({
       return Response.json({ escalation: snapshot(card) });
     }),
 
-    GET("/clinician/escalations/:id/messages", async (_req, { params }) => {
+    GET("/eve/v1/clinician/escalations/:id/messages", async (_req, { params }) => {
       const id = String(params.id ?? "");
       const card = getEscalation(id);
       if (!card) {
@@ -92,7 +92,7 @@ export default defineChannel({
       }
     }),
 
-    POST("/clinician/escalations/:id/messages", async (req, { params }) => {
+    POST("/eve/v1/clinician/escalations/:id/messages", async (req, { params }) => {
       const id = String(params.id ?? "");
       const card = getEscalation(id);
       if (!card) {
@@ -134,7 +134,7 @@ export default defineChannel({
       }
     }),
 
-    POST("/clinician/escalations/:id/resolve", async (_req, { params }) => {
+    POST("/eve/v1/clinician/escalations/:id/resolve", async (_req, { params }) => {
       const id = String(params.id ?? "");
       const existing = getEscalation(id);
       if (!existing) {

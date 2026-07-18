@@ -1,6 +1,6 @@
 /**
  * Single-file HTML + JS for the Tasso+ Gemini Live helper.
- * Served by GET /device-support — no bundler, no CDN dependency for the Live client.
+ * Served by GET /eve/v1/device-support — no bundler, no CDN dependency for the Live client.
  */
 
 export function renderDeviceSupportPage(): string {
@@ -312,7 +312,7 @@ export function renderDeviceSupportPage(): string {
     await ensureMedia();
 
     setStatus("Getting secure session…");
-    const tokenRes = await fetch("/device-support/api/live-token", {
+    const tokenRes = await fetch("/eve/v1/device-support/api/live-token", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ t: linkToken }),
@@ -659,7 +659,7 @@ export function renderDeviceSupportPage(): string {
     if (outcomePosted) return;
     outcomePosted = true;
     try {
-      await fetch("/device-support/api/outcome", {
+      await fetch("/eve/v1/device-support/api/outcome", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

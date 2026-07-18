@@ -177,9 +177,9 @@ export default defineChannel<ChannelState, Ctx, Target>({
   routes: [
     /**
      * Wassist platform webhook.
-     * Mounted at POST /webhook (Eve custom channels keep authored paths).
+     * Under `/eve/v1/...` so withEve proxies it (docs: only `/eve/v1/**` is mounted).
      */
-    POST("/webhook", async (req, { send, waitUntil }) => {
+    POST("/eve/v1/wassist/webhook", async (req, { send, waitUntil }) => {
       const rawBody = await req.text().catch(() => null);
       if (rawBody == null) {
         return Response.json({ error: "invalid body" }, { status: 400 });
@@ -266,12 +266,12 @@ export default defineChannel<ChannelState, Ctx, Target>({
       return Response.json({ ok: true });
     }),
 
-    GET("/health", async () =>
+    GET("/eve/v1/wassist/health", async () =>
       Response.json({
         ok: true,
         service: "scout-sage-wassist",
-        webhook: "/webhook",
-        resetAll: "/reset-all",
+        webhook: "/eve/v1/wassist/webhook",
+        resetAll: "/eve/v1/wassist/reset-all",
         sessionEpoch: getSessionEpoch(),
         authConfigured: Boolean(process.env.WASSIST_WEBHOOK_SECRET),
         modelConfigured: hasModelCredentials(),
@@ -283,7 +283,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
      * Next WhatsApp message for any phone starts a blank onboarding profile.
      * Open on purpose for hackathon demos — no auth.
      */
-    POST("/reset-all", async () => {
+    POST("/eve/v1/wassist/reset-all", async () => {
       const previousEpoch = getSessionEpoch();
       const sessionEpoch = bumpSessionEpoch();
 
@@ -299,10 +299,10 @@ export default defineChannel<ChannelState, Ctx, Target>({
 
     /**
      * Demo / ops: force a proactive check-in for one patient.
-     * Same HMAC auth as /webhook.
+     * Same HMAC auth as the Wassist webhook.
      * Body: { phone_number, conversation_id }
      */
-    POST("/proactive-checkin", async (req, { send, waitUntil }) => {
+    POST("/eve/v1/wassist/proactive-checkin", async (req, { send, waitUntil }) => {
       const rawBody = await req.text().catch(() => null);
       if (rawBody == null) {
         return Response.json({ error: "invalid body" }, { status: 400 });

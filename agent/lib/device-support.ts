@@ -123,7 +123,7 @@ export function mintLinkToken(input: {
     createdAt: Date.now(),
   });
 
-  const url = `${publicBaseUrl()}/device-support?t=${encodeURIComponent(token)}`;
+  const url = `${publicBaseUrl()}/eve/v1/device-support?t=${encodeURIComponent(token)}`;
   return { token, claims, url };
 }
 

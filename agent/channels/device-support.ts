@@ -34,9 +34,10 @@ export default defineChannel<ChannelState>({
   routes: [
     /**
      * Patient-facing Tasso+ Gemini Live helper page.
+     * Under `/eve/v1/...` so withEve proxies it (same pattern as wassist/clinician).
      * Query: ?t=<signed link token from Scout>
      */
-    GET("/device-support", async () => {
+    GET("/eve/v1/device-support", async () => {
       return new Response(renderDeviceSupportPage(), {
         headers: {
           "content-type": "text/html; charset=utf-8",
@@ -49,7 +50,7 @@ export default defineChannel<ChannelState>({
      * Validate the one-time link and mint a Gemini Live ephemeral token.
      * Body: { t: string }
      */
-    POST("/device-support/api/live-token", async (req) => {
+    POST("/eve/v1/device-support/api/live-token", async (req) => {
       let body: { t?: string };
       try {
         body = (await req.json()) as { t?: string };
@@ -93,7 +94,7 @@ export default defineChannel<ChannelState>({
      * Browser reports session outcome; resume WhatsApp Scout session.
      * Body: { t, outcome, summary? }
      */
-    POST("/device-support/api/outcome", async (req, { receive, waitUntil }) => {
+    POST("/eve/v1/device-support/api/outcome", async (req, { receive, waitUntil }) => {
       let body: {
         t?: string;
         outcome?: string;
