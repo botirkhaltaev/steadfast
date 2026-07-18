@@ -13,10 +13,11 @@ export default defineTool({
       .describe("Wassist conversation id if present in the user message"),
   }),
   async execute({ phoneNumber, conversationId }) {
-    let p = getPatient(phoneNumber);
-    if (conversationId && p.conversationId !== conversationId) {
-      p = updatePatient(phoneNumber, { conversationId });
-    }
+    const existing = getPatient(phoneNumber);
+    const p =
+      conversationId && existing.conversationId !== conversationId
+        ? updatePatient(phoneNumber, { conversationId })
+        : existing;
     const missing = missingOnboardingFields(p);
     return {
       phoneNumber: p.phoneNumber,

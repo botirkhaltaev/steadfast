@@ -175,13 +175,15 @@ export function requireOnboarded(phoneNumber: string): Patient {
 
 export function computeRiskScore(patient: Patient): DropoutRisk {
   const latest = patient.checkins[patient.checkins.length - 1];
-  let score = 0;
-  if (latest?.missedDoses && latest.missedDoses > 0) score += 2;
-  if ((latest?.sideEffectSeverity ?? 0) >= 7) score += 2;
-  else if ((latest?.sideEffectSeverity ?? 0) >= 4) score += 1;
-  if ((latest?.notes ?? "").toLowerCase().includes("stop")) score += 2;
-  if ((latest?.notes ?? "").toLowerCase().includes("cost")) score += 1;
-  if (patient.week != null && patient.week >= 12 && patient.week <= 24) score += 1;
+  const notes = (latest?.notes ?? "").toLowerCase();
+  const severity = latest?.sideEffectSeverity ?? 0;
+  const score =
+    (latest?.missedDoses && latest.missedDoses > 0 ? 2 : 0) +
+    (severity >= 7 ? 2 : severity >= 4 ? 1 : 0) +
+    (notes.includes("stop") ? 2 : 0) +
+    (notes.includes("cost") ? 1 : 0) +
+    (patient.week != null && patient.week >= 12 && patient.week <= 24 ? 1 : 0);
+
   if (score >= 4) return "high";
   if (score >= 2) return "medium";
   return "low";
@@ -207,19 +209,19 @@ export function rememberInboundMessage(
   messageId: string,
 ): boolean {
   getPatient(phoneNumber);
-  let firstSeen = false;
+  const result = { firstSeen: false };
   patientState.update((p) => {
     const seen = p.seenMessageIds ?? [];
     if (seen.includes(messageId)) {
-      firstSeen = false;
+      result.firstSeen = false;
       return p;
     }
-    firstSeen = true;
+    result.firstSeen = true;
     return {
       ...p,
       seenMessageIds: [...seen, messageId].slice(-50),
       updatedAt: now(),
     };
   });
-  return firstSeen;
+  return result.firstSeen;
 }

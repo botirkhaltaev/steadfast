@@ -16,13 +16,11 @@ export default defineSchedule({
   async run({ receive, waitUntil, appAuth }) {
     if (!process.env.WASSIST_API_KEY) return;
 
-    let conversations: Awaited<ReturnType<typeof listConversations>> = [];
-    try {
-      conversations = await listConversations();
-    } catch (err) {
+    const conversations = await listConversations().catch((err) => {
       console.error("[weekly_checkin] listConversations failed", err);
-      return;
-    }
+      return null;
+    });
+    if (!conversations) return;
 
     for (const conv of conversations) {
       const raw = conv.number ?? conv.phone_number;

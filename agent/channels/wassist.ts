@@ -147,10 +147,8 @@ export default defineChannel<ChannelState, Ctx, Target>({
      * Mounted at POST /webhook (Eve custom channels keep authored paths).
      */
     POST("/webhook", async (req, { send, waitUntil }) => {
-      let rawBody: string;
-      try {
-        rawBody = await req.text();
-      } catch {
+      const rawBody = await req.text().catch(() => null);
+      if (rawBody == null) {
         return Response.json({ error: "invalid body" }, { status: 400 });
       }
 
@@ -158,14 +156,18 @@ export default defineChannel<ChannelState, Ctx, Target>({
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
 
-      let body: unknown;
-      try {
-        body = JSON.parse(rawBody);
-      } catch {
+      const json = (() => {
+        try {
+          return { ok: true as const, value: JSON.parse(rawBody) as unknown };
+        } catch {
+          return { ok: false as const };
+        }
+      })();
+      if (!json.ok) {
         return Response.json({ error: "invalid json" }, { status: 400 });
       }
 
-      const parsed = parseWebhookBody(body);
+      const parsed = parseWebhookBody(json.value);
       if (parsed.kind === "error") {
         return Response.json({ error: parsed.error }, { status: 400 });
       }

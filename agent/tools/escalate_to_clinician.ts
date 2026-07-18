@@ -34,19 +34,18 @@ export default defineTool({
       redFlag,
     });
 
-    let notifyResult: Awaited<ReturnType<typeof notifyClinicians>>;
-    try {
-      notifyResult = await notifyClinicians(card);
-      if (notifyResult.notified) {
-        markEscalationNotified(phoneNumber, card.id);
-      }
-    } catch (err) {
-      notifyResult = {
-        notified: false,
-        channel: "none",
+    const notifyResult = await notifyClinicians(card)
+      .then((result) => {
+        if (result.notified) {
+          markEscalationNotified(phoneNumber, card.id);
+        }
+        return result;
+      })
+      .catch((err: unknown) => ({
+        notified: false as const,
+        channel: "none" as const,
         detail: err instanceof Error ? err.message : "notify_failed",
-      };
-    }
+      }));
 
     return {
       escalated: true,

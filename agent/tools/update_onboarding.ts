@@ -61,23 +61,19 @@ export default defineTool({
 
     if (input.motivation !== undefined) patch.motivation = input.motivation.trim();
 
-    let patient = updatePatient(input.phoneNumber, patch);
+    const afterPatch = updatePatient(input.phoneNumber, patch);
+    const sideEffectNote = input.sideEffectNote?.trim();
+    const afterSideEffects = sideEffectNote
+      ? updatePatient(input.phoneNumber, {
+          sideEffectHistory: [...afterPatch.sideEffectHistory, sideEffectNote],
+        })
+      : afterPatch;
 
-    if (input.sideEffectNote?.trim()) {
-      patient = updatePatient(input.phoneNumber, {
-        sideEffectHistory: [
-          ...patient.sideEffectHistory,
-          input.sideEffectNote.trim(),
-        ],
-      });
-    }
-
-    const missing = missingOnboardingFields(patient);
-    if (missing.length === 0 && patient.onboardingStatus !== "complete") {
-      patient = updatePatient(input.phoneNumber, {
-        onboardingStatus: "complete",
-      });
-    }
+    const missing = missingOnboardingFields(afterSideEffects);
+    const patient =
+      missing.length === 0 && afterSideEffects.onboardingStatus !== "complete"
+        ? updatePatient(input.phoneNumber, { onboardingStatus: "complete" })
+        : afterSideEffects;
 
     return {
       onboardingStatus: patient.onboardingStatus,

@@ -45,7 +45,7 @@ export async function waitForTurnSettlement(
     // session.waiting from a prior turn when replaying from index 0.
     const stream = await session.getEventStream({ startIndex: -1 });
     const reader = stream.getReader();
-    let armed = false;
+    const turn = { armed: false };
 
     try {
       while (true) {
@@ -61,10 +61,10 @@ export async function waitForTurnSettlement(
           evt.type === "step.started" ||
           evt.type === "actions.requested"
         ) {
-          armed = true;
+          turn.armed = true;
         }
 
-        if (!armed) continue;
+        if (!turn.armed) continue;
 
         if (
           isCurrentTurnBoundaryEvent(evt as never) ||
