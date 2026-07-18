@@ -1,6 +1,5 @@
 /**
  * Normalize WhatsApp quick-reply ids / casual labels into durable profile fields.
- * Keeps onboarding resilient when the model passes button ids through literally.
  */
 
 import type { CheckInFrequency, EmedSetupStatus } from "#lib/store";
@@ -9,15 +8,10 @@ const CONDITION_ALIASES: Record<string, string> = {
   cond_weight: "weight management",
   "weight management": "weight management",
   "weight mgmt": "weight management",
-  weight: "weight management",
   cond_diabetes: "diabetes",
   diabetes: "diabetes",
-  "type 2 diabetes": "diabetes",
-  t2d: "diabetes",
   cond_heart: "heart health",
   "heart health": "heart health",
-  heart: "heart health",
-  cardiac: "heart health",
   cond_other: "other",
   other: "other",
 };
@@ -34,7 +28,6 @@ export function normalizeCondition(
 const DIET_ALIASES: Record<string, string> = {
   diet_omnivore: "omnivore",
   omnivore: "omnivore",
-  "omnivore (meat + plants)": "omnivore",
   diet_vegetarian: "vegetarian",
   vegetarian: "vegetarian",
   diet_vegan: "vegan",
@@ -48,7 +41,7 @@ export function normalizeDiet(raw: string | undefined): string | undefined {
   return DIET_ALIASES[key] ?? raw.trim();
 }
 
-/** Accepts 90, "90", "protein_90", "~90g", "About 105g". */
+/** Accepts 90, "90", "protein_90", "~90g". */
 export function normalizeProteinTargetG(
   raw: string | number | undefined,
 ): number | undefined {
@@ -73,16 +66,11 @@ export function normalizeProteinTargetG(
 const FREQUENCY_ALIASES: Record<string, CheckInFrequency> = {
   checkin_daily: "daily",
   daily: "daily",
-  "every day": "daily",
-  "once a day": "daily",
   checkin_few_days: "every_few_days",
   every_few_days: "every_few_days",
   "every few days": "every_few_days",
-  "few days": "every_few_days",
   checkin_weekly: "weekly",
   weekly: "weekly",
-  "once a week": "weekly",
-  "every week": "weekly",
 };
 
 export function normalizeCheckInFrequency(
@@ -94,67 +82,19 @@ export function normalizeCheckInFrequency(
   return FREQUENCY_ALIASES[key];
 }
 
-/** Optional brand → generic helpers; unknown names pass through as typed. */
-const MEDICATION_ALIASES: Record<string, string> = {
-  med_semaglutide: "semaglutide",
-  semaglutide: "semaglutide",
-  ozempic: "semaglutide",
-  wegovy: "semaglutide",
-  med_tirzepatide: "tirzepatide",
-  tirzepatide: "tirzepatide",
-  mounjaro: "tirzepatide",
-  zepbound: "tirzepatide",
-  med_oral: "oral GLP-1",
-  "oral glp-1": "oral GLP-1",
-  "oral glp1": "oral GLP-1",
-  orforglipron: "oral GLP-1",
-  "oral wegovy": "oral GLP-1",
-  metformin: "metformin",
-  med_metformin: "metformin",
-};
-
 export function normalizeMedication(
   raw: string | undefined,
 ): string | undefined {
   if (raw == null) return undefined;
-  const key = raw.trim().toLowerCase();
-  if (!key) return undefined;
-  return MEDICATION_ALIASES[key] ?? raw.trim();
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  return trimmed;
 }
 
-const DOSE_ALIASES: Record<string, string> = {
-  dose_0_25: "0.25mg",
-  "0.25mg": "0.25mg",
-  "0.25": "0.25mg",
-  dose_0_5: "0.5mg",
-  "0.5mg": "0.5mg",
-  "0.5": "0.5mg",
-  dose_1: "1mg",
-  "1mg": "1mg",
-  "1.0mg": "1mg",
-  dose_2_5: "2.5mg",
-  "2.5mg": "2.5mg",
-  "2.5": "2.5mg",
-  dose_5: "5mg",
-  "5mg": "5mg",
-  dose_7_5: "7.5mg",
-  "7.5mg": "7.5mg",
-  "7.5": "7.5mg",
-  dose_3: "3mg",
-  "3mg": "3mg",
-  dose_7: "7mg",
-  "7mg": "7mg",
-  dose_14: "14mg",
-  "14mg": "14mg",
-};
-
-/** Maps dose button ids / labels; passes through other typed doses like 12.5mg. */
 export function normalizeDose(raw: string | undefined): string | undefined {
   if (raw == null) return undefined;
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
-  const key = trimmed.toLowerCase().replace(/\s+/g, "");
-  if (DOSE_ALIASES[key]) return DOSE_ALIASES[key];
 
   const mgMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*mg$/i);
   if (mgMatch) return `${mgMatch[1]}mg`;
@@ -166,19 +106,13 @@ const WEEK_ALIASES: Record<string, number> = {
   week_early: 2,
   "wk 1-4": 2,
   "wk 1–4": 2,
-  "week 1-4": 2,
-  "week 1–4": 2,
   week_mid: 8,
   "mo 2-3": 8,
   "mo 2–3": 8,
-  "month 2-3": 8,
-  "month 2–3": 8,
   week_later: 16,
   "mo 4+": 16,
-  "month 4+": 16,
 };
 
-/** Accepts week_early / week_mid / week_later, labels, or plain integers. */
 export function normalizeWeek(
   raw: string | number | undefined,
 ): number | undefined {
@@ -213,7 +147,6 @@ export function normalizeMotivation(
 
 /**
  * Side-effect quick replies. `side_skip` means do not record a note.
- * Returns `{ skip: true }` or `{ note }` or undefined if empty input.
  */
 export function normalizeSideEffectNote(
   raw: string | undefined,
@@ -231,20 +164,14 @@ export function normalizeSideEffectNote(
 
 const EMED_SETUP_ALIASES: Record<string, Exclude<EmedSetupStatus, "pending">> = {
   emed_connect: "linked",
-  connect: "linked",
   "connect emed": "linked",
-  "connect my emed": "linked",
   emed_no_device: "no_device",
-  "no device": "no_device",
   "i don't have one": "no_device",
   "i dont have one": "no_device",
-  "don't have one": "no_device",
   emed_skip: "skipped",
   "not now": "skipped",
-  later: "skipped",
 };
 
-/** Maps eMed onboarding quick-reply ids/labels to setup status (not pending). */
 export function normalizeEmedSetup(
   raw: string | undefined,
 ): Exclude<EmedSetupStatus, "pending"> | undefined {

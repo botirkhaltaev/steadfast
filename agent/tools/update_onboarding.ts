@@ -36,12 +36,12 @@ export default defineTool({
       .string()
       .optional()
       .describe(
-        "Medication name as typed, or known aliases (e.g. metformin, semaglutide, ozempic)",
+        "Medication name as typed by the patient",
       ),
     dose: z
       .string()
       .optional()
-      .describe("e.g. 5mg, 10 units, or optional ids like dose_0_25 / dose_5"),
+      .describe("e.g. 5mg, 10 units, once daily"),
     week: z
       .union([z.number().int().min(0).max(104), z.string().min(1)])
       .optional()

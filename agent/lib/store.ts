@@ -31,7 +31,7 @@ export type CheckIn = {
   resistanceSessions?: number;
 };
 
-/** Future human-clinician handoff card. Kept for deferred escalation path. */
+/** Human-clinician handoff card (not live; Sage is the clinical path). */
 export type EscalationCard = {
   id: string;
   phoneNumber: string;
@@ -165,15 +165,8 @@ export function getPatient(phoneNumber: string): Patient {
     );
   }
 
-  // Canonicalize formatting + backfill fields added after launch.
-  const legacy = current as Patient & { condition?: string | null };
-  if (current.phoneNumber !== phone || legacy.condition === undefined) {
-    patientState.update((p) => ({
-      ...p,
-      phoneNumber: phone,
-      condition: (p as Patient & { condition?: string | null }).condition ?? null,
-      updatedAt: now(),
-    }));
+  if (current.phoneNumber !== phone) {
+    patientState.update((p) => ({ ...p, phoneNumber: phone, updatedAt: now() }));
   }
 
   return patientState.get();
@@ -237,7 +230,7 @@ export function listEmedReadings(
   };
 }
 
-/** Onboarding: patient chose Connect — link device and sync stand-in readings. */
+/** Onboarding: patient chose Connect — link device and seed readings. */
 export function linkEmedDevice(phoneNumber: string): {
   patient: Patient;
   connectSummary: { deviceLabel: string; weightKg: number; asOf: string };

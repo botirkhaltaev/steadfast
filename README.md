@@ -2,7 +2,7 @@
 
 WhatsApp-native dual AI for chronic care programmes: **Scout** (patient companion) and **Sage** (AI clinician) improve the patient experience and save clinician time.
 
-**UI = WhatsApp only.** Conversational onboarding, frequency-based proactive check-ins, side-effect and adherence coaching, optional meal-photo nutrition support, quick-reply choices, dropout-risk awareness, and Sage consults on red flags / complex cases. Human clinician handoff is deferred for a later pass.
+**UI = WhatsApp only.** Conversational onboarding, frequency-based proactive check-ins, side-effect and adherence coaching, optional meal-photo nutrition support, quick-reply choices, dropout-risk awareness, and Sage consults on red flags / complex cases.
 
 Built with [Wassist](https://wassist.app) webhooks + [Vercel Eve](https://eve.dev).
 
@@ -122,7 +122,6 @@ Eve: `GET /eve/v1/health`
 
 - Adherence & behaviour coaching only — never diagnoses or changes doses  
 - Red flags → Scout consults **Sage** + emergency-care messaging when appropriate  
-- Human clinician escalation is deferred (tool kept dormant for later)  
 - Shell / web / file built-ins disabled  
 
 ## Pitch close
