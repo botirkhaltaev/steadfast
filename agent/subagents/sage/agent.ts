@@ -7,5 +7,5 @@ import { defineAgent } from "eve";
 export default defineAgent({
   description:
     "Sage, the AI clinician for Scout & Sage. Consult for clinical briefs, dropout/risk review, eMed biomarker review, red-flag assessment, and coaching guidance. Owns clinical eMed tools. Never messages the patient — returns structured guidance for Scout to paraphrase.",
-  model: process.env.EVE_MODEL ?? "openai/gpt-5.4-mini",
+  model: process.env.EVE_MODEL ?? "openai/gpt-5.4-nano",
 });
