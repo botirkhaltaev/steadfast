@@ -15,9 +15,10 @@ Built with [Wassist](https://wassist.app) BYOA + [Vercel Eve](https://eve.dev).
 ## Architecture
 
 ```
-WhatsApp  ⇄  Wassist BYOA
+WhatsApp  ⇄  Wassist (BYOA or platform webhook)
                 │ POST /webhook
-                │ { message, image?, phone_number, reply_callback }
+                │ BYOA: { message, image?, phone_number, reply_callback }
+                │ Event: { event: message.received, contact, message.body, conversationId }
                 ▼
          Eve agent (Vercel)
            instructions.md     — onboarding + coach + safety
