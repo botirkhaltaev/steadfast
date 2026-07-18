@@ -3,7 +3,12 @@ import { z } from "zod";
 import {
   normalizeCheckInFrequency,
   normalizeDiet,
+  normalizeDose,
+  normalizeMedication,
+  normalizeMotivation,
   normalizeProteinTargetG,
+  normalizeSideEffectNote,
+  normalizeWeek,
 } from "#lib/onboarding-normalize";
 import {
   missingOnboardingFields,
@@ -12,7 +17,7 @@ import {
 
 export default defineTool({
   description:
-    "Save onboarding answers from WhatsApp (name, medication, dose, week, diet, protein target, check-in frequency, motivation). Call after each answer or batch when several arrive. Accepts quick-reply ids like diet_vegetarian, protein_90, checkin_weekly. Marks onboarding complete when all required fields are present.",
+    "Save onboarding answers from WhatsApp (name, medication, dose, week, diet, protein target, check-in frequency, motivation, side effects). Call after each answer or batch when several arrive. Accepts quick-reply ids: med_*, dose_*, week_*, diet_*, protein_*, checkin_*, side_*, mot_*. Marks onboarding complete when all required fields are present.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     conversationId: z.string().optional(),
@@ -20,9 +25,17 @@ export default defineTool({
     medication: z
       .string()
       .optional()
-      .describe("e.g. semaglutide, tirzepatide, oral Wegovy, orforglipron"),
-    dose: z.string().optional().describe("e.g. 0.25mg, 1mg, 12.5mg"),
-    week: z.number().int().min(0).max(104).optional(),
+      .describe(
+        "semaglutide / tirzepatide / oral GLP-1, or ids med_semaglutide / med_tirzepatide / med_oral",
+      ),
+    dose: z
+      .string()
+      .optional()
+      .describe("e.g. 0.25mg, 2.5mg, or ids dose_0_25 / dose_2_5 / dose_14"),
+    week: z
+      .union([z.number().int().min(0).max(104), z.string().min(1)])
+      .optional()
+      .describe("Week number, or ids week_early / week_mid / week_later"),
     diet: z
       .string()
       .optional()
@@ -37,8 +50,16 @@ export default defineTool({
       .describe(
         "How often to proactively check in: daily | every_few_days | weekly, or ids checkin_daily / checkin_few_days / checkin_weekly",
       ),
-    motivation: z.string().optional(),
-    sideEffectNote: z.string().optional(),
+    motivation: z
+      .string()
+      .optional()
+      .describe("Free text or ids mot_health / mot_confidence / mot_energy"),
+    sideEffectNote: z
+      .string()
+      .optional()
+      .describe(
+        "Free text or ids side_none / side_nausea / side_skip (skip records nothing)",
+      ),
   }),
   async execute(input) {
     const patch: Parameters<typeof updatePatient>[1] = {
@@ -46,9 +67,24 @@ export default defineTool({
     };
     if (input.conversationId) patch.conversationId = input.conversationId;
     if (input.name !== undefined) patch.name = input.name.trim();
-    if (input.medication !== undefined) patch.medication = input.medication.trim();
-    if (input.dose !== undefined) patch.dose = input.dose.trim();
-    if (input.week !== undefined) patch.week = input.week;
+
+    const medication = normalizeMedication(input.medication);
+    if (medication !== undefined) patch.medication = medication;
+
+    const dose = normalizeDose(input.dose);
+    if (dose !== undefined) patch.dose = dose;
+
+    const week = normalizeWeek(input.week);
+    if (week !== undefined) {
+      if (week < 0 || week > 104) {
+        throw new Error("week must be between 0 and 104");
+      }
+      patch.week = week;
+    } else if (input.week !== undefined) {
+      throw new Error(
+        `Could not parse week from "${String(input.week)}" — use a number or week_early / week_mid / week_later`,
+      );
+    }
 
     const diet = normalizeDiet(input.diet);
     if (diet !== undefined) patch.diet = diet;
@@ -74,15 +110,18 @@ export default defineTool({
       );
     }
 
-    if (input.motivation !== undefined) patch.motivation = input.motivation.trim();
+    const motivation = normalizeMotivation(input.motivation);
+    if (motivation !== undefined) patch.motivation = motivation;
 
     const afterPatch = updatePatient(input.phoneNumber, patch);
-    const sideEffectNote = input.sideEffectNote?.trim();
-    const afterSideEffects = sideEffectNote
-      ? updatePatient(input.phoneNumber, {
-          sideEffectHistory: [...afterPatch.sideEffectHistory, sideEffectNote],
-        })
-      : afterPatch;
+
+    const sideEffect = normalizeSideEffectNote(input.sideEffectNote);
+    const afterSideEffects =
+      sideEffect && "note" in sideEffect
+        ? updatePatient(input.phoneNumber, {
+            sideEffectHistory: [...afterPatch.sideEffectHistory, sideEffect.note],
+          })
+        : afterPatch;
 
     const missing = missingOnboardingFields(afterSideEffects);
     const patient =
