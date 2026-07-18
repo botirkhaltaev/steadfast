@@ -1,6 +1,11 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { addCheckIn, computeRiskScore, getPatient, updatePatient } from "#lib/store";
+import {
+  addCheckIn,
+  computeRiskScore,
+  requireOnboarded,
+  updatePatient,
+} from "#lib/store";
 
 export default defineTool({
   description:
@@ -15,10 +20,7 @@ export default defineTool({
     resistanceSessions: z.number().optional(),
   }),
   async execute(input) {
-    const existing = getPatient(input.phoneNumber);
-    if (existing.onboardingStatus !== "complete") {
-      throw new Error("Onboarding incomplete — finish onboarding before logging check-ins");
-    }
+    requireOnboarded(input.phoneNumber);
 
     const checkin = {
       at: new Date().toISOString(),

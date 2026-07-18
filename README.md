@@ -81,10 +81,17 @@ npx eve deploy
 # or: npx vercel --yes
 ```
 
-Set env on Vercel: `AI_GATEWAY_API_KEY` (or rely on Gateway OIDC), `WASSIST_API_KEY`, `RUNWARE_API_KEY`.
+Set env on Vercel:
+- `AI_GATEWAY_API_KEY` (or Gateway OIDC)
+- `WASSIST_API_KEY`
+- `RUNWARE_API_KEY`
+- `WASSIST_WEBHOOK_SECRET` (recommended; send as `X-Wassist-Secret`)
+- `CLINICIAN_WEBHOOK_URL` (Slack/PagerDuty for red-flag escalations)
 
-Health: `GET /health` → `{"ok":true,"service":"steadfast-wassist","webhook":"/webhook"}`  
+Health: `GET /health` → `{"ok":true,"webhook":"/webhook"}`  
 Eve: `GET /eve/v1/health`
+
+Eve custom channels mount authored paths as-is (`/webhook`), not under `/eve/v1/wassist/…`.
 
 ## Demo (live WhatsApp)
 

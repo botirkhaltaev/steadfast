@@ -5,7 +5,8 @@ export default eveChannel({
   auth: [
     vercelOidc(),
     localDev(),
-    // Public demo / hackathon judging — lock down before production.
+    // WhatsApp traffic uses /webhook (Wassist channel), not these routes.
+    // Keep none() so hackathon curl/session demos work; remove before public launch.
     none(),
   ],
 });

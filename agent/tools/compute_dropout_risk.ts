@@ -1,6 +1,6 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { computeRiskScore, getPatient, updatePatient } from "#lib/store";
+import { computeRiskScore, requireOnboarded, updatePatient } from "#lib/store";
 
 export default defineTool({
   description:
@@ -9,10 +9,7 @@ export default defineTool({
     phoneNumber: z.string(),
   }),
   async execute({ phoneNumber }) {
-    const patient = getPatient(phoneNumber);
-    if (patient.onboardingStatus !== "complete") {
-      throw new Error("Onboarding incomplete — finish onboarding first");
-    }
+    const patient = requireOnboarded(phoneNumber);
     const risk = computeRiskScore(patient);
     updatePatient(phoneNumber, { dropoutRisk: risk });
     return {

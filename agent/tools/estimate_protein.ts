@@ -1,22 +1,20 @@
 import { generateText } from "ai";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { getPatient } from "#lib/store";
+import { requireOnboarded } from "#lib/store";
 
 export default defineTool({
   description:
-    "Estimate protein (and fibre) grams from a meal photo URL using vision. Use when the patient sends a lunch/dinner image.",
+    "Estimate protein (and fibre) grams from a meal photo URL using vision. Use when the patient sends a lunch/dinner image. Requires completed onboarding.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     imageUrl: z.string().url(),
     mealDescriptionHint: z.string().optional(),
   }),
   async execute({ phoneNumber, imageUrl, mealDescriptionHint }) {
-    const patient = getPatient(phoneNumber);
+    const patient = requireOnboarded(phoneNumber);
     if (patient.proteinTargetG == null) {
-      throw new Error(
-        "Protein target not set — finish onboarding (proteinTargetG) before estimating meals",
-      );
+      throw new Error("Protein target missing on onboarded profile");
     }
 
     const dietNote = patient.diet ? `Diet: ${patient.diet}.` : "";

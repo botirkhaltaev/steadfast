@@ -1,4 +1,5 @@
 import { defineState } from "eve/context";
+import { normalizePhone } from "#lib/phone";
 
 export type DropoutRisk = "low" | "medium" | "high";
 export type OnboardingStatus = "not_started" | "in_progress" | "complete";
@@ -52,10 +53,10 @@ function now() {
   return new Date().toISOString();
 }
 
-function blankPatient(): Patient {
+function blankPatient(phoneNumber = ""): Patient {
   const ts = now();
   return {
-    phoneNumber: "",
+    phoneNumber,
     onboardingStatus: "not_started",
     name: null,
     week: null,
@@ -77,37 +78,44 @@ function blankPatient(): Patient {
  * Durable per-WhatsApp-session patient record (Eve workflow state).
  * Sessions are keyed by phone via the Wassist channel continuation token.
  */
-export const patientState = defineState("steadfast.patient", blankPatient);
+export const patientState = defineState("steadfast.patient", () => blankPatient());
 
 export function getPatient(phoneNumber: string): Patient {
+  const phone = normalizePhone(phoneNumber);
+  if (!phone) {
+    throw new Error("phoneNumber is required");
+  }
+
   const current = patientState.get();
+
   if (!current.phoneNumber) {
-    patientState.update(() => ({
-      ...blankPatient(),
-      phoneNumber,
-      createdAt: now(),
-      updatedAt: now(),
-    }));
+    patientState.update(() => blankPatient(phone));
     return patientState.get();
   }
-  if (current.phoneNumber !== phoneNumber) {
-    patientState.update(() => ({
-      ...blankPatient(),
-      phoneNumber,
-      createdAt: now(),
-      updatedAt: now(),
-    }));
-    return patientState.get();
+
+  const currentPhone = normalizePhone(current.phoneNumber);
+  if (currentPhone !== phone) {
+    // Same Eve session must not silently wipe another patient's durable record.
+    throw new Error(
+      `Patient phone mismatch: session is ${currentPhone}, tool called with ${phone}`,
+    );
   }
-  return current;
+
+  // Canonicalize formatting if needed.
+  if (current.phoneNumber !== phone) {
+    patientState.update((p) => ({ ...p, phoneNumber: phone, updatedAt: now() }));
+  }
+
+  return patientState.get();
 }
 
 export function updatePatient(phoneNumber: string, patch: Partial<Patient>): Patient {
   getPatient(phoneNumber);
+  const phone = normalizePhone(phoneNumber);
   patientState.update((p) => ({
     ...p,
     ...patch,
-    phoneNumber,
+    phoneNumber: phone,
     updatedAt: now(),
   }));
   return patientState.get();
@@ -129,18 +137,38 @@ export function createEscalation(
   const ts = now();
   const card: EscalationCard = {
     ...input,
+    phoneNumber: normalizePhone(input.phoneNumber),
     id: crypto.randomUUID(),
     status: "open",
     createdAt: ts,
     updatedAt: ts,
   };
-  getPatient(input.phoneNumber);
+  getPatient(card.phoneNumber);
   patientState.update((p) => ({
     ...p,
     escalations: [...p.escalations, card],
     updatedAt: ts,
   }));
   return card;
+}
+
+export function markEscalationNotified(phoneNumber: string, escalationId: string): void {
+  getPatient(phoneNumber);
+  patientState.update((p) => ({
+    ...p,
+    escalations: p.escalations.map((e) =>
+      e.id === escalationId ? { ...e, status: "notified" as const, updatedAt: now() } : e,
+    ),
+    updatedAt: now(),
+  }));
+}
+
+export function requireOnboarded(phoneNumber: string): Patient {
+  const patient = getPatient(phoneNumber);
+  if (patient.onboardingStatus !== "complete") {
+    throw new Error("Onboarding incomplete — finish onboarding first");
+  }
+  return patient;
 }
 
 export function computeRiskScore(patient: Patient): DropoutRisk {

@@ -18,61 +18,61 @@ export type WassistOutbound = {
   buttons?: QuickReplyButton[];
 };
 
-function buildBody(payload: WassistOutbound) {
-  if (payload.buttons?.length || payload.imageUrl) {
-    return {
-      type: "unified",
-      unified: {
-        text: payload.content,
-        ...(payload.imageUrl
-          ? { media: { url: payload.imageUrl } }
-          : {}),
-        ...(payload.buttons?.length
-          ? {
-              buttons: payload.buttons.slice(0, 3).map((b) => ({
-                type: "quick_reply" as const,
-                text: b.text.slice(0, 20),
-                quickReplyId: b.quickReplyId.slice(0, 200),
-              })),
-            }
-          : {}),
-      },
-    };
-  }
-  return { type: "message", content: payload.content };
+function buildUnified(payload: WassistOutbound) {
+  return {
+    type: "unified" as const,
+    unified: {
+      text: payload.content,
+      ...(payload.imageUrl ? { media: { url: payload.imageUrl } } : {}),
+      ...(payload.buttons?.length
+        ? {
+            buttons: payload.buttons.slice(0, 3).map((b) => ({
+              type: "quick_reply" as const,
+              text: b.text.slice(0, 20),
+              quickReplyId: b.quickReplyId.slice(0, 200),
+            })),
+          }
+        : {}),
+    },
+  };
+}
+
+function buildLegacy(payload: WassistOutbound) {
+  return {
+    type: "message" as const,
+    content: payload.content,
+    ...(payload.imageUrl ? { image: payload.imageUrl } : {}),
+    // Some BYOA sandboxes accept buttons at the top level.
+    ...(payload.buttons?.length ? { buttons: payload.buttons.slice(0, 3) } : {}),
+  };
+}
+
+async function postJson(url: string, body: unknown): Promise<Response> {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 /**
- * Deliver via reply_callback (valid ~24h from user's last message).
+ * Deliver via reply_callback (valid within the WhatsApp 24h window).
+ * Tries unified rich content first, then legacy shape — buttons preserved in both.
  */
 export async function sendViaCallback(
   replyCallback: string,
   payload: WassistOutbound,
 ): Promise<void> {
-  const res = await fetch(replyCallback, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildBody(payload)),
-  });
+  const primary = await postJson(replyCallback, buildUnified(payload));
+  if (primary.ok) return;
 
-  if (!res.ok) {
-    // Fallback: plain content if unified shape is rejected by sandbox.
-    if (payload.buttons?.length || payload.imageUrl) {
-      const fallback = await fetch(replyCallback, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: payload.content,
-          ...(payload.imageUrl ? { image: payload.imageUrl } : {}),
-        }),
-      });
-      if (fallback.ok) return;
-      const text = await fallback.text().catch(() => "");
-      throw new Error(`Wassist callback failed (${fallback.status}): ${text}`);
-    }
-    const text = await res.text().catch(() => "");
-    throw new Error(`Wassist callback failed (${res.status}): ${text}`);
-  }
+  const fallback = await postJson(replyCallback, buildLegacy(payload));
+  if (fallback.ok) return;
+
+  const text = await fallback.text().catch(() => "");
+  throw new Error(
+    `Wassist callback failed (unified ${primary.status}, legacy ${fallback.status}): ${text}`,
+  );
 }
 
 export async function sendViaRest(opts: {
@@ -89,22 +89,11 @@ export async function sendViaRest(opts: {
   const base = process.env.WASSIST_API_BASE ?? "https://backend.wassist.app/api/v1";
   const body =
     opts.buttons?.length || opts.imageUrl
-      ? {
-          type: "unified",
-          unified: {
-            text: opts.content,
-            ...(opts.imageUrl ? { media: { url: opts.imageUrl } } : {}),
-            ...(opts.buttons?.length
-              ? {
-                  buttons: opts.buttons.slice(0, 3).map((b) => ({
-                    type: "quick_reply" as const,
-                    text: b.text.slice(0, 20),
-                    quickReplyId: b.quickReplyId.slice(0, 200),
-                  })),
-                }
-              : {}),
-          },
-        }
+      ? buildUnified({
+          content: opts.content,
+          imageUrl: opts.imageUrl,
+          buttons: opts.buttons,
+        })
       : { type: "text", text: { body: opts.content } };
 
   const res = await fetch(`${base}/conversations/${opts.conversationId}/messages/`, {
@@ -140,6 +129,27 @@ export async function listConversations(): Promise<WassistConversation[]> {
     const text = await res.text().catch(() => "");
     throw new Error(`Wassist list conversations failed (${res.status}): ${text}`);
   }
-  const json = (await res.json()) as WassistConversation[] | { results?: WassistConversation[] };
+  const json = (await res.json()) as
+    | WassistConversation[]
+    | { results?: WassistConversation[] };
   return Array.isArray(json) ? json : (json.results ?? []);
+}
+
+/**
+ * Verify inbound BYOA requests when WASSIST_WEBHOOK_SECRET is configured.
+ * If unset, requests are allowed (hackathon/sandbox) — set the secret before real traffic.
+ */
+export function verifyWebhookSecret(req: Request): boolean {
+  const secret = process.env.WASSIST_WEBHOOK_SECRET;
+  if (!secret) return true;
+
+  const header =
+    req.headers.get("x-wassist-secret") ??
+    req.headers.get("x-steadfast-webhook-secret") ??
+    req.headers.get("authorization");
+
+  if (!header) return false;
+  if (header === secret) return true;
+  if (header === `Bearer ${secret}`) return true;
+  return false;
 }

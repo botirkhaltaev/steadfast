@@ -1,9 +1,13 @@
 import { defineSchedule } from "eve/schedules";
 import wassist from "../channels/wassist";
-import { listConversations, sendViaRest } from "#lib/wassist";
+import { listConversations } from "#lib/wassist";
+import { normalizePhone } from "#lib/phone";
 
 /**
- * Proactive weekly check-in for active Wassist conversations.
+ * Kick weekly check-in turns for known Wassist conversations.
+ * The resumed Eve session (continuation token = phone) decides whether
+ * onboarding is complete and calls send_whatsapp_message if so.
+ *
  * Cron: Mondays 09:00 UTC
  */
 export default defineSchedule({
@@ -20,24 +24,23 @@ export default defineSchedule({
     }
 
     for (const conv of conversations) {
-      const phone = conv.number ?? conv.phone_number;
-      if (!phone || !conv.id) continue;
-
-      const message =
-        "Hi — it's your Steadfast weekly check-in. How has your GLP-1 week been? Any side effects, missed doses, or questions?";
+      const raw = conv.number ?? conv.phone_number;
+      if (!raw || !conv.id) continue;
+      const phone = normalizePhone(raw);
 
       waitUntil(
-        sendViaRest({
-          conversationId: conv.id,
-          content: message,
+        receive(wassist, {
+          message: [
+            `[patient_phone=${phone}]`,
+            `[conversation_id=${conv.id}]`,
+            "[system] Weekly check-in cron.",
+            "Call get_patient_profile.",
+            "If onboarding is incomplete, do nothing (no patient message).",
+            "If onboarding is complete, call send_whatsapp_message with a short warm weekly check-in asking about side effects, doses, and how they feel — then stop.",
+          ].join("\n"),
+          target: { phoneNumber: phone },
+          auth: appAuth,
         })
-          .then(() =>
-            receive(wassist, {
-              message: `[system] Weekly check-in nudge delivered to ${phone}. Await their reply; do not message again until they respond.`,
-              target: { phoneNumber: phone },
-              auth: appAuth,
-            }),
-          )
           .then(() => undefined)
           .catch((err) => {
             console.error("[weekly_checkin] failed", phone, err);
