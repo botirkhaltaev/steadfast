@@ -106,7 +106,6 @@ Env vars:
 - `WASSIST_API_KEY`
 - `WASSIST_WEBHOOK_SECRET` (required in production — HMAC `x-wassist-signature`)
 - `RUNWARE_API_KEY`
-- `DEMO_RESET_SECRET` (required for `POST /reset-all` demo wipe)
 - `CLINICIAN_WEBHOOK_URL` (optional; **future** human escalation sink — unused by Scout/Sage today)
 
 Health: `GET /health` → `{"ok":true,"service":"scout-sage-wassist","webhook":"/webhook","resetAll":"/reset-all",...}`  
@@ -117,11 +116,10 @@ Eve: `GET /eve/v1/health`
 Patient data lives in Eve durable **sessions** (not a separate Postgres). Restarting the app does **not** clear them. To demo from scratch:
 
 ```bash
-curl -X POST https://<your-host>/reset-all \
-  -H "x-demo-reset-secret: $DEMO_RESET_SECRET"
+curl -X POST https://<your-host>/reset-all
 ```
 
-This bumps a session epoch so every phone gets a **new** Eve session on the next WhatsApp message (blank onboarding / eMed). Set `DEMO_RESET_SECRET` in env.
+This bumps a session epoch so every phone gets a **new** Eve session on the next WhatsApp message (blank onboarding / eMed). Open endpoint — no auth (hackathon demos).
 
 ## Demo (live WhatsApp)
 
