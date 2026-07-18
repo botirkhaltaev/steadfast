@@ -1,8 +1,7 @@
 import { defineState } from "eve/context";
 import {
-  buildEmedDemoSeed,
+  buildEmedSeedForPatient,
   emedReadingsLastDays,
-  isEmedDemoPhone,
   latestEmedReading,
   type EmedDeviceLink,
   type EmedReading,
@@ -136,12 +135,12 @@ function blankPatient(phoneNumber = ""): Patient {
  */
 export const patientState = defineState("scout_sage.patient", () => blankPatient());
 
-function seedEmedDemoIfNeeded(phone: string): void {
-  if (!isEmedDemoPhone(phone)) return;
+/** On signup / first load, each patient gets their own eMed device + readings in state. */
+function seedEmedForPatientIfNeeded(phone: string): void {
   const current = patientState.get();
   if (current.emedDevice) return;
 
-  const seed = buildEmedDemoSeed(now());
+  const seed = buildEmedSeedForPatient(phone, now());
   patientState.update((p) => ({
     ...p,
     emedDevice: seed.device,
@@ -160,7 +159,7 @@ export function getPatient(phoneNumber: string): Patient {
 
   if (!current.phoneNumber) {
     patientState.update(() => blankPatient(phone));
-    seedEmedDemoIfNeeded(phone);
+    seedEmedForPatientIfNeeded(phone);
     return patientState.get();
   }
 
@@ -177,7 +176,7 @@ export function getPatient(phoneNumber: string): Patient {
     patientState.update((p) => ({ ...p, phoneNumber: phone, updatedAt: now() }));
   }
 
-  seedEmedDemoIfNeeded(phone);
+  seedEmedForPatientIfNeeded(phone);
   return patientState.get();
 }
 

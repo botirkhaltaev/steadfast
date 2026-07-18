@@ -1,7 +1,6 @@
 import { normalizePhone } from "#lib/phone";
 
-export const EMED_DEMO_DEVICE_ID = "emed-monitor-demo-001";
-export const EMED_DEMO_DEVICE_LABEL = "eMed Home Monitor";
+export const EMED_DEVICE_LABEL = "eMed Home Monitor";
 
 export type EmedDeviceLink = {
   deviceId: string;
@@ -19,26 +18,32 @@ export type EmedReading = {
   bpDiastolicMmHg: number;
 };
 
-/** Demo WhatsApp phone that receives a one-time eMed seed into durable state. */
-export function emedDemoPhone(): string | null {
-  const raw = process.env.EMED_DEMO_PHONE?.trim();
-  if (!raw) return null;
-  return normalizePhone(raw) || null;
+/** Stable per-patient device id from phone (no shared demo device). */
+export function emedDeviceIdForPhone(phoneNumber: string): string {
+  const phone = normalizePhone(phoneNumber);
+  const digits = phone.replace(/\D/g, "");
+  const suffix = digits.slice(-8) || "unknown";
+  return `emed-monitor-${suffix}`;
 }
 
-export function isEmedDemoPhone(phoneNumber: string): boolean {
-  const demo = emedDemoPhone();
-  if (!demo) return false;
-  return normalizePhone(phoneNumber) === demo;
-}
-
-/** Fixed seed rows written once into patient state (not regenerated per tool call). */
-export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): {
+/**
+ * One-time seed of eMed device + readings for a patient signup.
+ * Stored in durable state; tools read rows — not regenerated each call.
+ * Stand-in until a live eMed API is wired.
+ */
+export function buildEmedSeedForPatient(
+  phoneNumber: string,
+  linkedAt: string = new Date().toISOString(),
+): {
   device: EmedDeviceLink;
   readings: EmedReading[];
 } {
+  const phone = normalizePhone(phoneNumber);
   const base = new Date(linkedAt);
-  // Anchor to local calendar days ending today.
+  // Small per-user offset so two phones don't share identical series.
+  const digits = phone.replace(/\D/g, "");
+  const offset = Number(digits.slice(-2) || "0") % 5;
+
   const day = (offsetFromToday: number, hourUtc = 8) => {
     const d = new Date(base);
     d.setUTCHours(hourUtc, 0, 0, 0);
@@ -49,7 +54,7 @@ export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): 
   const readings: EmedReading[] = [
     {
       at: day(6),
-      weightKg: 94.2,
+      weightKg: 94.2 + offset * 0.3,
       glucoseMmolL: 6.8,
       restingHrBpm: 74,
       bpSystolicMmHg: 128,
@@ -57,7 +62,7 @@ export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): 
     },
     {
       at: day(5),
-      weightKg: 93.9,
+      weightKg: 93.9 + offset * 0.3,
       glucoseMmolL: 6.6,
       restingHrBpm: 72,
       bpSystolicMmHg: 126,
@@ -65,7 +70,7 @@ export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): 
     },
     {
       at: day(4),
-      weightKg: 93.7,
+      weightKg: 93.7 + offset * 0.3,
       glucoseMmolL: 6.5,
       restingHrBpm: 88,
       bpSystolicMmHg: 130,
@@ -73,7 +78,7 @@ export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): 
     },
     {
       at: day(3),
-      weightKg: 93.4,
+      weightKg: 93.4 + offset * 0.3,
       glucoseMmolL: 6.3,
       restingHrBpm: 71,
       bpSystolicMmHg: 124,
@@ -81,7 +86,7 @@ export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): 
     },
     {
       at: day(2),
-      weightKg: 93.1,
+      weightKg: 93.1 + offset * 0.3,
       glucoseMmolL: 6.2,
       restingHrBpm: 70,
       bpSystolicMmHg: 122,
@@ -89,7 +94,7 @@ export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): 
     },
     {
       at: day(1),
-      weightKg: 92.9,
+      weightKg: 92.9 + offset * 0.3,
       glucoseMmolL: 6.1,
       restingHrBpm: 69,
       bpSystolicMmHg: 121,
@@ -97,7 +102,7 @@ export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): 
     },
     {
       at: day(0),
-      weightKg: 92.6,
+      weightKg: 92.6 + offset * 0.3,
       glucoseMmolL: 5.9,
       restingHrBpm: 68,
       bpSystolicMmHg: 120,
@@ -107,8 +112,8 @@ export function buildEmedDemoSeed(linkedAt: string = new Date().toISOString()): 
 
   return {
     device: {
-      deviceId: EMED_DEMO_DEVICE_ID,
-      label: EMED_DEMO_DEVICE_LABEL,
+      deviceId: emedDeviceIdForPhone(phone),
+      label: EMED_DEVICE_LABEL,
       status: "active",
       linkedAt,
     },

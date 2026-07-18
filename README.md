@@ -72,15 +72,14 @@ Requires **Node 24+**.
 ```bash
 cp .env.example .env
 # AI_GATEWAY_API_KEY, WASSIST_API_KEY, WASSIST_WEBHOOK_SECRET, RUNWARE_API_KEY
-# Optional: EMED_DEMO_PHONE=+44...  (one-time seed of eMed readings for that WhatsApp user)
 
 npm install
 npm run dev
 ```
 
-### Demo eMed device
+### eMed device (per patient)
 
-Set `EMED_DEMO_PHONE` to your tester’s E.164 WhatsApp number. On first session load, Eve durable state gets a linked eMed monitor + ~7 days of readings. **Sage** reads them via `get_emed_device` / `get_emed_biomarkers`. Scout only sees `emedDeviceLinked` on the profile and consults Sage for biomarker context.
+When a patient signs up via WhatsApp (their phone is the account key), Eve durable state gets a **per-user** eMed monitor link + ~7 days of readings. Stand-in until a live eMed API is wired. **Sage** reads them via `get_emed_device` / `get_emed_biomarkers`. Scout only sees `emedDeviceLinked` and consults Sage for biomarker context.
 
 ### Wire Wassist
 
@@ -103,7 +102,6 @@ Env vars:
 - `WASSIST_API_KEY`
 - `WASSIST_WEBHOOK_SECRET` (required in production — HMAC `x-wassist-signature`)
 - `RUNWARE_API_KEY`
-- `EMED_DEMO_PHONE` (optional; E.164 phone that receives a one-time eMed seed into durable state)
 - `CLINICIAN_WEBHOOK_URL` (optional; **future** human escalation sink — unused by Scout/Sage today)
 
 Health: `GET /health` → `{"ok":true,"service":"scout-sage-wassist","webhook":"/webhook"}`  
@@ -114,7 +112,7 @@ Eve: `GET /eve/v1/health`
 1. New chat → onboarding with quick replies (incl. check-in frequency) → confirm profile  
 2. Agent-initiated check-in on their cadence (or `POST /proactive-checkin`)  
 3. “Rough week, nauseous, skipped a dose” → Scout coaches; may consult Sage on risk  
-4. With `EMED_DEMO_PHONE` set → Scout sees device linked → consults Sage → Sage pulls eMed biomarkers  
+4. After signup → patient has eMed device in state → Scout consults Sage → Sage pulls that user’s biomarkers  
 5. Lunch photo → protein estimate + Runware upgrade image  
 6. “Bad stomach pain” → Scout stops coaching → consults Sage → patient-safe next steps (no human handoff yet)  
 
