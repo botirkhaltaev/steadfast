@@ -32,6 +32,21 @@ type ChannelState = {
 type Target = { phoneNumber: string };
 type Ctx = { state: ChannelState };
 
+/** Same-isolate claim so dual webhook posts do not both call send(). */
+const INGRESS_CLAIM_TTL_MS = 10 * 60 * 1000;
+const ingressClaims = new Map<string, number>();
+
+function claimInboundMessageId(messageId: string): boolean {
+  const now = Date.now();
+  const expired = [...ingressClaims.entries()]
+    .filter(([, expiresAt]) => expiresAt <= now)
+    .map(([id]) => id);
+  for (const id of expired) ingressClaims.delete(id);
+  if (ingressClaims.has(messageId)) return false;
+  ingressClaims.set(messageId, now + INGRESS_CLAIM_TTL_MS);
+  return true;
+}
+
 function tokenFor(phoneNumber: string) {
   return normalizePhone(phoneNumber);
 }
@@ -182,6 +197,15 @@ export default defineChannel<ChannelState, Ctx, Target>({
       }
 
       const inbound = parsed.message;
+
+      // Claim before starting an Eve turn — second fan-out acks and stops.
+      if (!claimInboundMessageId(inbound.messageId)) {
+        console.info("[wassist] ingress duplicate skipped", {
+          phoneNumber: inbound.phoneNumber,
+          messageId: inbound.messageId,
+        });
+        return Response.json({ ok: true, duplicate: true });
+      }
 
       if (!hasModelCredentials()) {
         waitUntil(
@@ -372,10 +396,19 @@ export default defineChannel<ChannelState, Ctx, Target>({
 
     async "turn.failed"(eventData, channel) {
       if (channel.state.duplicate) return;
+      if (!channel.state.conversationId) return;
       const detail =
         typeof eventData.message === "string"
           ? eventData.message
           : "something went wrong on my side";
+      // Hook / race failures often surface here with no coach text — stay silent.
+      if (channel.state.pendingTexts.length === 0 && /hookconflict/i.test(detail)) {
+        console.info("[wassist] turn.failed silent (hook conflict)", {
+          phoneNumber: channel.state.phoneNumber,
+          messageId: channel.state.messageId,
+        });
+        return;
+      }
       channel.state.pendingTexts = [
         `Sorry — ${detail}. Please try again in a moment. If you feel unwell, contact your clinician or emergency services.`,
       ];
@@ -388,9 +421,16 @@ export default defineChannel<ChannelState, Ctx, Target>({
 
     async "session.failed"(_eventData, channel) {
       if (channel.state.duplicate) return;
-      channel.state.pendingTexts = [
-        "Sorry — I'm having trouble right now. Please try again shortly. If this is urgent, contact your clinician or emergency services.",
-      ];
+      if (!channel.state.conversationId) return;
+      // Racing second delivery (HookConflict) must not spam an apology.
+      // Only flush coach text already buffered; never invent a new message.
+      if (channel.state.pendingTexts.length === 0) {
+        console.info("[wassist] session.failed silent", {
+          phoneNumber: channel.state.phoneNumber,
+          messageId: channel.state.messageId,
+        });
+        return;
+      }
       try {
         await flush(channel);
       } catch (err) {

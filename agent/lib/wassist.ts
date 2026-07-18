@@ -105,7 +105,9 @@ export type ParseResult =
 
 /**
  * Parse a Wassist platform webhook body.
- * Only `message.received` / `subscription.message.received` become agent turns.
+ * Only `message.received` becomes an agent turn.
+ * `subscription.message.received` is ignored — Wassist often fans out both
+ * for the same WhatsApp message, which would start duplicate Eve turns.
  */
 export function parseWebhookBody(body: unknown): ParseResult {
   if (!body || typeof body !== "object") {
@@ -117,10 +119,7 @@ export function parseWebhookBody(body: unknown): ParseResult {
     return { kind: "error", error: "missing event" };
   }
 
-  if (
-    event !== "message.received" &&
-    event !== "subscription.message.received"
-  ) {
+  if (event !== "message.received") {
     return { kind: "ignored", event };
   }
 
