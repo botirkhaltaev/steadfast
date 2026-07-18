@@ -37,9 +37,9 @@ export function buildProactiveCheckInMessage(opts: {
     "If onboarding is incomplete, do nothing (no patient message).",
     forceLine,
     "If you should message: call send_whatsapp_message with one short warm check-in.",
-    "Use their name if known. Ask about side effects, doses, and how they feel.",
+    "Use their name if known. Ask about side effects, doses, and how their programme is going.",
     "Match their checkInFrequency tone (daily = brief pulse; weekly = fuller check-in).",
-    "If emedSetupStatus is linked, you may mention Sage can review their eMed monitor — do not invent vitals (Scout has no eMed reading tools).",
+    "If emedSetupStatus is linked, you may mention Sage can review their eMed health data — do not invent vitals (Scout has no eMed reading tools).",
     "Then stop — do not coach further until they reply.",
   ].join("\n");
 }

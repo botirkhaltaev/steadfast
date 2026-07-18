@@ -3,9 +3,12 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { requireOnboarded } from "#lib/store";
 
+/** Default daily protein target when the patient did not set one during onboarding. */
+const DEFAULT_PROTEIN_TARGET_G = 90;
+
 export default defineTool({
   description:
-    "Estimate protein (and fibre) grams from a meal photo URL using vision. Use when the patient sends a lunch/dinner image. Requires completed onboarding.",
+    "Optional lifestyle tool: estimate protein (and fibre) grams from a meal photo URL using vision. Use when the patient sends a lunch/dinner image and nutrition support is helpful. Requires completed onboarding.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     imageUrl: z.string().url(),
@@ -13,11 +16,12 @@ export default defineTool({
   }),
   async execute({ phoneNumber, imageUrl, mealDescriptionHint }) {
     const patient = requireOnboarded(phoneNumber);
-    if (patient.proteinTargetG == null) {
-      throw new Error("Protein target missing on onboarded profile");
-    }
+    const proteinTargetG = patient.proteinTargetG ?? DEFAULT_PROTEIN_TARGET_G;
 
     const dietNote = patient.diet ? `Diet: ${patient.diet}.` : "";
+    const conditionNote = patient.condition
+      ? `Patient programme/condition: ${patient.condition}.`
+      : "";
 
     const { text } = await generateText({
       model: process.env.EVE_VISION_MODEL ?? "openai/gpt-5.4-mini",
@@ -30,7 +34,7 @@ export default defineTool({
               text: [
                 "Estimate the protein and fibre content of this meal in grams.",
                 dietNote,
-                "Patient is on a GLP-1 programme.",
+                conditionNote,
                 mealDescriptionHint ? `Hint: ${mealDescriptionHint}` : "",
                 'Reply ONLY as JSON: {"proteinG":number,"fibreG":number,"description":string,"confidence":"low"|"medium"|"high"}',
               ]
@@ -65,8 +69,8 @@ export default defineTool({
       fibreG: Number(parsed.fibreG ?? 0),
       description: parsed.description ?? "meal from photo",
       confidence: parsed.confidence ?? "medium",
-      proteinTargetG: patient.proteinTargetG,
-      gapG: Math.max(0, patient.proteinTargetG - proteinG),
+      proteinTargetG,
+      gapG: Math.max(0, proteinTargetG - proteinG),
     };
   },
 });

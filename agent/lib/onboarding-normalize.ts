@@ -5,6 +5,32 @@
 
 import type { CheckInFrequency, EmedSetupStatus } from "#lib/store";
 
+const CONDITION_ALIASES: Record<string, string> = {
+  cond_weight: "weight management",
+  "weight management": "weight management",
+  "weight mgmt": "weight management",
+  weight: "weight management",
+  cond_diabetes: "diabetes",
+  diabetes: "diabetes",
+  "type 2 diabetes": "diabetes",
+  t2d: "diabetes",
+  cond_heart: "heart health",
+  "heart health": "heart health",
+  heart: "heart health",
+  cardiac: "heart health",
+  cond_other: "other",
+  other: "other",
+};
+
+export function normalizeCondition(
+  raw: string | undefined,
+): string | undefined {
+  if (raw == null) return undefined;
+  const key = raw.trim().toLowerCase();
+  if (!key) return undefined;
+  return CONDITION_ALIASES[key] ?? raw.trim();
+}
+
 const DIET_ALIASES: Record<string, string> = {
   diet_omnivore: "omnivore",
   omnivore: "omnivore",
@@ -68,6 +94,7 @@ export function normalizeCheckInFrequency(
   return FREQUENCY_ALIASES[key];
 }
 
+/** Optional brand → generic helpers; unknown names pass through as typed. */
 const MEDICATION_ALIASES: Record<string, string> = {
   med_semaglutide: "semaglutide",
   semaglutide: "semaglutide",
@@ -80,9 +107,10 @@ const MEDICATION_ALIASES: Record<string, string> = {
   med_oral: "oral GLP-1",
   "oral glp-1": "oral GLP-1",
   "oral glp1": "oral GLP-1",
-  oral: "oral GLP-1",
   orforglipron: "oral GLP-1",
   "oral wegovy": "oral GLP-1",
+  metformin: "metformin",
+  med_metformin: "metformin",
 };
 
 export function normalizeMedication(

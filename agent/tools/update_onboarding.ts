@@ -2,6 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import {
   normalizeCheckInFrequency,
+  normalizeCondition,
   normalizeDiet,
   normalizeDose,
   normalizeEmedSetup,
@@ -20,21 +21,27 @@ import {
 
 export default defineTool({
   description:
-    "Save onboarding answers from WhatsApp (name, medication, dose, week, diet, protein target, check-in frequency, eMed setup, motivation, side effects). Call after each answer. Accepts quick-reply ids including emed_connect / emed_no_device / emed_skip. Marks onboarding complete when all required fields are present.",
+    "Save onboarding answers from WhatsApp (name, condition, medication, dose, week, check-in frequency, eMed setup; optional diet, protein, motivation, side effects). Call after each answer. Accepts quick-reply ids including cond_* and emed_*. Marks onboarding complete when all required fields are present.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     conversationId: z.string().optional(),
     name: z.string().min(1).optional(),
+    condition: z
+      .string()
+      .optional()
+      .describe(
+        "Programme/condition: weight management, diabetes, heart health, or free text; ids cond_weight / cond_diabetes / cond_heart / cond_other",
+      ),
     medication: z
       .string()
       .optional()
       .describe(
-        "semaglutide / tirzepatide / oral GLP-1, or ids med_semaglutide / med_tirzepatide / med_oral",
+        "Medication name as typed, or known aliases (e.g. metformin, semaglutide, ozempic)",
       ),
     dose: z
       .string()
       .optional()
-      .describe("e.g. 0.25mg, 2.5mg, or ids dose_0_25 / dose_2_5 / dose_14"),
+      .describe("e.g. 5mg, 10 units, or optional ids like dose_0_25 / dose_5"),
     week: z
       .union([z.number().int().min(0).max(104), z.string().min(1)])
       .optional()
@@ -42,11 +49,15 @@ export default defineTool({
     diet: z
       .string()
       .optional()
-      .describe("omnivore/vegetarian/vegan, or quick-reply id diet_vegetarian"),
+      .describe(
+        "Optional: omnivore/vegetarian/vegan, or quick-reply id diet_vegetarian",
+      ),
     proteinTargetG: z
       .union([z.number().int().min(40).max(250), z.string().min(1)])
       .optional()
-      .describe("Daily protein grams, or quick-reply id like protein_90 / ~105g"),
+      .describe(
+        "Optional daily protein grams, or quick-reply id like protein_90 / ~105g",
+      ),
     checkInFrequency: z
       .string()
       .optional()
@@ -76,6 +87,9 @@ export default defineTool({
     };
     if (input.conversationId) patch.conversationId = input.conversationId;
     if (input.name !== undefined) patch.name = input.name.trim();
+
+    const condition = normalizeCondition(input.condition);
+    if (condition !== undefined) patch.condition = condition;
 
     const medication = normalizeMedication(input.medication);
     if (medication !== undefined) patch.medication = medication;
@@ -165,6 +179,7 @@ export default defineTool({
       emedConnectSummary,
       profile: {
         name: patient.name,
+        condition: patient.condition,
         medication: patient.medication,
         dose: patient.dose,
         week: patient.week,
