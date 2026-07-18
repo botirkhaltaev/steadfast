@@ -1,7 +1,7 @@
 {
   "name": "steadfast",
   "version": "0.1.0",
-  "description": "WhatsApp GLP-1 persistence companion (Wassist BYOA + Vercel Eve)",
+  "description": "WhatsApp GLP-1 persistence companion (Wassist webhooks + Vercel Eve)",
   "type": "module",
   "imports": {
     "#*": "./agent/*",
