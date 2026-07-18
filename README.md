@@ -40,8 +40,8 @@ One inbound path (signed platform events). One outbound path (REST). No BYOA cal
 New numbers start with an empty durable profile.
 
 1. Welcome + disclose you're not a doctor  
-2. One question at a time: name → medication → dose → week → diet → protein target → **check-in frequency**  
-3. Diet / protein / frequency use WhatsApp **quick-reply buttons** (`offer_choices`) — Daily / Every few days / Weekly  
+2. One question at a time: name (typed) → medication → dose → week → diet → protein → **check-in frequency**  
+3. Almost everything uses WhatsApp **quick-reply buttons** (`offer_choices`, max 3) — only name needs typing  
 4. Saves via `update_onboarding` until complete  
 5. Confirms summary + explains that **Steadfast will message them** on that cadence  
 
