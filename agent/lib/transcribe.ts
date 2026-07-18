@@ -9,7 +9,9 @@ export async function transcribeAudioUrl(
 ): Promise<string | null> {
   try {
     const { text } = await transcribe({
-      model: process.env.EVE_TRANSCRIBE_MODEL ?? "openai/whisper-1",
+      // Prefer gpt-4o-mini-transcribe over legacy whisper-1: better WER, ~half the cost.
+      model:
+        process.env.EVE_TRANSCRIBE_MODEL ?? "openai/gpt-4o-mini-transcribe",
       audio: new URL(audioUrl),
     });
     const trimmed = text.trim();
