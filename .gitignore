@@ -14,3 +14,4 @@ dist
 deploy-args.json
 .deploy*.json
 .cursor-deploy-args.json
+.env*.local

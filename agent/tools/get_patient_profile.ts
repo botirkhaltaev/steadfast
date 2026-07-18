@@ -28,8 +28,10 @@ export default defineTool({
         ? updatePatient(phoneNumber, { conversationId })
         : existing;
     const missing = missingOnboardingFields(p);
-    const openHandoff = openHandoffForPhone(phoneNumber);
-    const handoffStatus = phoneHasHumanHandoff(phoneNumber) ? "human" : "ai";
+    const openHandoff = await openHandoffForPhone(phoneNumber);
+    const handoffStatus = (await phoneHasHumanHandoff(phoneNumber))
+      ? "human"
+      : "ai";
     return {
       phoneNumber: p.phoneNumber,
       onboardingStatus: p.onboardingStatus,

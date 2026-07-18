@@ -6,6 +6,7 @@ import {
   markLinkOutcome,
   markLinkStarted,
   mintGeminiEphemeralToken,
+  resetLinkToSent,
   verifyLinkToken,
   type DeviceSupportOutcome,
 } from "#lib/device-support";
@@ -59,12 +60,12 @@ export default defineChannel<ChannelState>({
       }
 
       const raw = typeof body.t === "string" ? body.t : "";
-      const verified = verifyLinkToken(raw);
+      const verified = await verifyLinkToken(raw);
       if (!verified.ok) {
         return jsonError(verified.error, verified.status);
       }
 
-      const started = markLinkStarted(verified.claims.sid);
+      const started = await markLinkStarted(verified.claims.sid);
       if (!started.ok) {
         return jsonError(started.error, started.status);
       }
@@ -81,8 +82,7 @@ export default defineChannel<ChannelState>({
         });
       } catch (err) {
         // Allow retry with the same link if Gemini mint fails.
-        const entry = verified.entry;
-        entry.status = "link_sent";
+        await resetLinkToSent(verified.claims.sid);
         const message =
           err instanceof Error ? err.message : "Failed to mint live token";
         console.error("[device-support] live-token mint failed", err);
@@ -107,7 +107,7 @@ export default defineChannel<ChannelState>({
       }
 
       const raw = typeof body.t === "string" ? body.t : "";
-      const verified = verifyLinkToken(raw);
+      const verified = await verifyLinkToken(raw);
       if (!verified.ok) {
         return jsonError(verified.error, verified.status);
       }
@@ -120,7 +120,11 @@ export default defineChannel<ChannelState>({
       const summary =
         typeof body.summary === "string" ? body.summary.slice(0, 800) : null;
 
-      const marked = markLinkOutcome(verified.claims.sid, outcome, summary);
+      const marked = await markLinkOutcome(
+        verified.claims.sid,
+        outcome,
+        summary,
+      );
       if (!marked.ok) {
         return jsonError(marked.error, marked.status);
       }

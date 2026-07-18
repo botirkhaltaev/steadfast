@@ -48,7 +48,7 @@ export default defineTool({
     }
 
     try {
-      const { url, claims } = mintLinkToken({
+      const { url, claims } = await mintLinkToken({
         phoneNumber: patient.phoneNumber,
         conversationId: patient.conversationId,
         name: patient.name,
