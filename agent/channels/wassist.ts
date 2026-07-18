@@ -32,21 +32,6 @@ type ChannelState = {
 type Target = { phoneNumber: string };
 type Ctx = { state: ChannelState };
 
-/** Same-isolate claim so dual webhook posts do not both call send(). */
-const INGRESS_CLAIM_TTL_MS = 10 * 60 * 1000;
-const ingressClaims = new Map<string, number>();
-
-function claimInboundMessageId(messageId: string): boolean {
-  const now = Date.now();
-  const expired = [...ingressClaims.entries()]
-    .filter(([, expiresAt]) => expiresAt <= now)
-    .map(([id]) => id);
-  for (const id of expired) ingressClaims.delete(id);
-  if (ingressClaims.has(messageId)) return false;
-  ingressClaims.set(messageId, now + INGRESS_CLAIM_TTL_MS);
-  return true;
-}
-
 function tokenFor(phoneNumber: string) {
   return normalizePhone(phoneNumber);
 }
@@ -197,15 +182,6 @@ export default defineChannel<ChannelState, Ctx, Target>({
       }
 
       const inbound = parsed.message;
-
-      // Claim before starting an Eve turn — second fan-out acks and stops.
-      if (!claimInboundMessageId(inbound.messageId)) {
-        console.info("[wassist] ingress duplicate skipped", {
-          phoneNumber: inbound.phoneNumber,
-          messageId: inbound.messageId,
-        });
-        return Response.json({ ok: true, duplicate: true });
-      }
 
       if (!hasModelCredentials()) {
         waitUntil(
