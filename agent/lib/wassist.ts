@@ -1,3 +1,6 @@
+import "#lib/env-bootstrap";
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 export type WassistWebhookPayload = {
   message?: string | null;
   image?: string | null;
@@ -144,20 +147,74 @@ export async function listConversations(): Promise<WassistConversation[]> {
 }
 
 /**
- * Verify inbound BYOA requests when WASSIST_WEBHOOK_SECRET is configured.
- * If unset, requests are allowed (hackathon/sandbox) — set the secret before real traffic.
+ * Stripe-style HMAC verification for `x-wassist-signature: t=…,v1=…`.
+ * Used by Wassist platform webhooks; BYOA may or may not sign yet.
  */
-export function verifyWebhookSecret(req: Request): boolean {
-  const secret = process.env.WASSIST_WEBHOOK_SECRET;
+export function verifyWassistSignature(
+  rawBody: string,
+  signatureHeader: string,
+  secret: string,
+  toleranceSec = 300,
+): boolean {
+  const parts = Object.fromEntries(
+    signatureHeader.split(",").map((part) => {
+      const [k, ...rest] = part.trim().split("=");
+      return [k, rest.join("=")];
+    }),
+  ) as { t?: string; v1?: string };
+
+  const timestamp = parts.t;
+  const signature = parts.v1;
+  if (!timestamp || !signature) return false;
+
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts)) return false;
+  const ageSec = Math.abs(Math.floor(Date.now() / 1000) - ts);
+  if (ageSec > toleranceSec) return false;
+
+  const expected = createHmac("sha256", secret)
+    .update(`${timestamp}.${rawBody}`, "utf8")
+    .digest("hex");
+
+  try {
+    const a = Buffer.from(expected, "utf8");
+    const b = Buffer.from(signature, "utf8");
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify inbound webhook auth when WASSIST_WEBHOOK_SECRET is set.
+ *
+ * Priority:
+ * 1. `x-wassist-signature` → HMAC-SHA256 (platform webhooks)
+ * 2. `x-wassist-secret` / `x-steadfast-webhook-secret` → exact match
+ * 3. No recognizable auth headers → allow (Wassist BYOA currently posts
+ *    without a shared-secret or signature header; rejecting those caused
+ *    live WhatsApp 401s / "not authorized to respond")
+ *
+ * Note: do not treat `Authorization` as the webhook secret — Vercel/OIDC
+ * and other proxies often populate it with unrelated tokens.
+ */
+export function verifyWebhookSecret(req: Request, rawBody = ""): boolean {
+  const secret = process.env.WASSIST_WEBHOOK_SECRET?.trim();
   if (!secret) return true;
 
-  const header =
-    req.headers.get("x-wassist-secret") ??
-    req.headers.get("x-steadfast-webhook-secret") ??
-    req.headers.get("authorization");
+  const signature = req.headers.get("x-wassist-signature");
+  if (signature) {
+    return verifyWassistSignature(rawBody, signature, secret);
+  }
 
-  if (!header) return false;
-  if (header === secret) return true;
-  if (header === `Bearer ${secret}`) return true;
-  return false;
+  const shared =
+    req.headers.get("x-wassist-secret") ??
+    req.headers.get("x-steadfast-webhook-secret");
+  if (shared) {
+    return shared === secret || shared === `Bearer ${secret}`;
+  }
+
+  // BYOA: no signature / custom secret headers on the wire yet.
+  return true;
 }

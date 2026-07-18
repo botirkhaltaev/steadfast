@@ -85,7 +85,7 @@ Set env on Vercel:
 - `AI_GATEWAY_API_KEY` (or Gateway OIDC)
 - `WASSIST_API_KEY`
 - `RUNWARE_API_KEY`
-- `WASSIST_WEBHOOK_SECRET` (recommended; send as `X-Wassist-Secret`)
+- `WASSIST_WEBHOOK_SECRET` (HMAC via `x-wassist-signature`, or `X-Wassist-Secret`; BYOA allows unsigned)
 - `CLINICIAN_WEBHOOK_URL` (Slack/PagerDuty for red-flag escalations)
 
 Health: `GET /health` → `{"ok":true,"webhook":"/webhook"}`  

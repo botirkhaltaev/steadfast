@@ -1,3 +1,4 @@
+import "#lib/env-bootstrap";
 import { defineAgent } from "eve";
 
 export default defineAgent({

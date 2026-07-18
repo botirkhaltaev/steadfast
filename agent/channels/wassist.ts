@@ -167,13 +167,20 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
      * Mounted at POST /webhook (Eve custom channels use authored paths as-is).
      */
     POST("/webhook", async (req, { send, waitUntil }) => {
-      if (!verifyWebhookSecret(req)) {
+      let rawBody: string;
+      try {
+        rawBody = await req.text();
+      } catch {
+        return Response.json({ error: "invalid body" }, { status: 400 });
+      }
+
+      if (!verifyWebhookSecret(req, rawBody)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
 
       let body: WassistWebhookPayload;
       try {
-        body = (await req.json()) as WassistWebhookPayload;
+        body = JSON.parse(rawBody) as WassistWebhookPayload;
       } catch {
         return Response.json({ error: "invalid json" }, { status: 400 });
       }
