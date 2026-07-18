@@ -1,6 +1,11 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { getPatient, missingOnboardingFields, updatePatient } from "#lib/store";
+import {
+  getPatient,
+  isProactiveCheckInDue,
+  missingOnboardingFields,
+  updatePatient,
+} from "#lib/store";
 
 export default defineTool({
   description:
@@ -30,9 +35,13 @@ export default defineTool({
       medication: p.medication,
       diet: p.diet,
       proteinTargetG: p.proteinTargetG,
+      checkInFrequency: p.checkInFrequency,
+      proactiveCheckInDue: isProactiveCheckInDue(p),
+      lastProactiveCheckInAt: p.lastProactiveCheckInAt ?? null,
       motivation: p.motivation,
       sideEffectHistory: p.sideEffectHistory,
       dropoutRisk: p.dropoutRisk,
+      conversationId: p.conversationId ?? null,
       recentCheckins: p.checkins.slice(-3),
       openEscalations: p.escalations.filter((e) => e.status === "open").length,
     };

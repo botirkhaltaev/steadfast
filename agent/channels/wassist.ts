@@ -1,7 +1,13 @@
 import { defineChannel, GET, POST } from "eve/channels";
 import { toolResultFrom } from "eve/tools";
 import { normalizePhone } from "#lib/phone";
-import { rememberInboundMessage } from "#lib/store";
+import { buildProactiveCheckInMessage } from "#lib/proactive-checkin";
+import { waitForTurnSettlement } from "#lib/session-wait";
+import {
+  getPatient,
+  rememberInboundMessage,
+  updatePatient,
+} from "#lib/store";
 import {
   authenticateWebhook,
   parseWebhookBody,
@@ -224,6 +230,79 @@ export default defineChannel<ChannelState, Ctx, Target>({
         modelConfigured: hasModelCredentials(),
       }),
     ),
+
+    /**
+     * Demo / ops: force a proactive check-in for one patient.
+     * Same HMAC auth as /webhook.
+     * Body: { phone_number, conversation_id }
+     */
+    POST("/proactive-checkin", async (req, { send, waitUntil }) => {
+      const rawBody = await req.text().catch(() => null);
+      if (rawBody == null) {
+        return Response.json({ error: "invalid body" }, { status: 400 });
+      }
+      if (!authenticateWebhook(req, rawBody)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      const json = (() => {
+        try {
+          return { ok: true as const, value: JSON.parse(rawBody) as Record<string, unknown> };
+        } catch {
+          return { ok: false as const };
+        }
+      })();
+      if (!json.ok) {
+        return Response.json({ error: "invalid json" }, { status: 400 });
+      }
+
+      const phoneNumber = normalizePhone(String(json.value.phone_number ?? ""));
+      if (!phoneNumber) {
+        return Response.json({ error: "phone_number required" }, { status: 400 });
+      }
+
+      const conversationId =
+        typeof json.value.conversation_id === "string"
+          ? json.value.conversation_id.trim()
+          : "";
+      if (!conversationId) {
+        return Response.json(
+          { error: "conversation_id required" },
+          { status: 400 },
+        );
+      }
+
+      waitUntil(
+        (async () => {
+          const session = await send(
+            buildProactiveCheckInMessage({
+              phoneNumber,
+              conversationId,
+              force: true,
+            }),
+            {
+              auth: {
+                authenticator: "app",
+                principalType: "runtime",
+                principalId: "eve:app",
+                attributes: {
+                  phoneNumber,
+                  conversationId,
+                },
+              },
+              continuationToken: tokenFor(phoneNumber),
+              state: initialState(phoneNumber, conversationId),
+              title: `WhatsApp ${phoneNumber}`,
+            },
+          );
+          await waitForTurnSettlement(session);
+        })().catch((err) => {
+          console.error("[wassist] proactive-checkin failed", err);
+        }),
+      );
+
+      return Response.json({ ok: true, phoneNumber, conversationId });
+    }),
   ],
 
   events: {
@@ -234,7 +313,17 @@ export default defineChannel<ChannelState, Ctx, Target>({
       channel.state.sent = false;
       channel.state.duplicate = false;
 
-      const { phoneNumber, messageId } = channel.state;
+      const { phoneNumber, conversationId, messageId } = channel.state;
+
+      if (phoneNumber && conversationId) {
+        try {
+          getPatient(phoneNumber);
+          updatePatient(phoneNumber, { conversationId });
+        } catch (err) {
+          console.warn("[wassist] conversationId persist failed", err);
+        }
+      }
+
       if (phoneNumber && messageId) {
         // Same WhatsApp message must not run two coach turns.
         channel.state.duplicate = !rememberInboundMessage(phoneNumber, messageId);
