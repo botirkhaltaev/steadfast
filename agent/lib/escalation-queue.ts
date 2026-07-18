@@ -201,3 +201,12 @@ export async function resolveEscalation(
   if (!card) return null;
   return upsertEscalation({ ...card, status: "resolved" });
 }
+
+/** Demo wipe: delete every escalation row. Returns how many were removed. */
+export async function clearAllEscalations(): Promise<number> {
+  const db = getDb();
+  const deleted = await db
+    .delete(escalations)
+    .returning({ id: escalations.id });
+  return deleted.length;
+}
