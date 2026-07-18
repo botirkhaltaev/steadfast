@@ -19,6 +19,8 @@ export type NormalizedInbound = {
   replyCallback: string | null;
   conversationId: string | null;
   event: string | null;
+  /** Platform message id when present — used for idempotency. */
+  messageId: string | null;
   /** Lifecycle / ping / unknown events — ack without running the agent. */
   ignore: boolean;
 };
@@ -227,6 +229,7 @@ export function normalizeInboundWebhook(body: unknown): NormalizedInbound | { er
         conversationId:
           typeof b.conversationId === "string" ? b.conversationId : null,
         event,
+        messageId: null,
         ignore: true,
       };
     }
@@ -255,6 +258,7 @@ export function normalizeInboundWebhook(body: unknown): NormalizedInbound | { er
     const imageUrl = extractMediaUrl(media);
     const conversationId =
       typeof b.conversationId === "string" ? b.conversationId : null;
+    const messageId = typeof message.id === "string" ? message.id : null;
 
     return {
       phoneNumber,
@@ -263,6 +267,7 @@ export function normalizeInboundWebhook(body: unknown): NormalizedInbound | { er
       replyCallback: null,
       conversationId,
       event,
+      messageId,
       ignore: false,
     };
   }
@@ -282,6 +287,7 @@ export function normalizeInboundWebhook(body: unknown): NormalizedInbound | { er
     conversationId:
       typeof b.conversation_id === "string" ? b.conversation_id : null,
     event: null,
+    messageId: null,
     ignore: false,
   };
 }

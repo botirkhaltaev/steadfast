@@ -2,13 +2,16 @@ import { defineChannel, GET, POST } from "eve/channels";
 import { toolResultFrom } from "eve/tools";
 import { isAllowedReplyCallback } from "#lib/callback-url";
 import {
-  abandonDelivery,
-  armDeliveryWait,
   createDeliveryKey,
   signalDelivery,
   wasDeliveryAbandoned,
 } from "#lib/delivery-wait";
+import { claimInbound, outboundFingerprint } from "#lib/idempotency";
 import { normalizePhone } from "#lib/phone";
+import {
+  claimPatientInbound,
+  claimPatientOutbound,
+} from "#lib/store";
 import {
   deliverOutbound,
   normalizeInboundWebhook,
@@ -28,6 +31,9 @@ type WassistState = {
   replyCallback: string | null;
   conversationId: string | null;
   deliveryKey: string | null;
+  idempotencyKey: string | null;
+  /** Set when a duplicate inbound turn should not message the patient. */
+  suppressOutbound: boolean;
   pendingButtons: QuickReplyButton[] | null;
   pendingImageUrl: string | null;
   /** Assembled assistant texts for this turn (sent once on turn.completed). */
@@ -43,8 +49,6 @@ type WassistCtx = {
   state: WassistState;
 };
 
-const DELIVERY_TIMEOUT_MS = 50_000;
-
 function tokenFor(phoneNumber: string) {
   return normalizePhone(phoneNumber);
 }
@@ -54,12 +58,15 @@ function freshState(
   replyCallback: string | null = null,
   conversationId: string | null = null,
   deliveryKey: string | null = null,
+  idempotencyKey: string | null = null,
 ): WassistState {
   return {
     phoneNumber,
     replyCallback,
     conversationId,
     deliveryKey,
+    idempotencyKey,
+    suppressOutbound: false,
     pendingButtons: null,
     pendingImageUrl: null,
     pendingTexts: [],
@@ -84,7 +91,15 @@ async function flushOutbound(
   const outcome = opts?.outcome ?? "delivered";
 
   if (wasDeliveryAbandoned(deliveryKey)) {
-    // Webhook already sent a timeout apology; do not double-message.
+    return;
+  }
+
+  if (channel.state.suppressOutbound) {
+    console.warn("[wassist] outbound suppressed (duplicate inbound turn)", {
+      phoneNumber: channel.state.phoneNumber,
+      idempotencyKey: channel.state.idempotencyKey,
+    });
+    signalDelivery(deliveryKey, outcome);
     return;
   }
 
@@ -111,6 +126,28 @@ async function flushOutbound(
 
   if (!text) {
     signalDelivery(deliveryKey, outcome === "failed" ? "failed" : "delivered");
+    return;
+  }
+
+  const fingerprint = outboundFingerprint({
+    phoneNumber: channel.state.phoneNumber,
+    conversationId,
+    content: text,
+  });
+  const phone = channel.state.phoneNumber;
+  const durableClaim =
+    phone != null ? claimPatientOutbound(phone, fingerprint) : true;
+  if (!durableClaim) {
+    console.warn("[wassist] skipping duplicate outbound", {
+      phoneNumber: channel.state.phoneNumber,
+      conversationId,
+      chars: text.length,
+    });
+    channel.state.pendingButtons = null;
+    channel.state.pendingImageUrl = null;
+    channel.state.pendingTexts = [];
+    channel.state.deliveredThisTurn = true;
+    signalDelivery(deliveryKey, outcome);
     return;
   }
 
@@ -203,6 +240,22 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
       const { phoneNumber, imageUrl, replyCallback, conversationId } = inbound;
       const text = inbound.text;
 
+      // Wassist often double-delivers (developer webhook + agent fan-out).
+      // Prefer message.id — stable across fan-out — over per-subscription delivery id.
+      const deliveryHeader = req.headers.get("x-wassist-delivery");
+      const idempotencyKey =
+        inbound.messageId ||
+        deliveryHeader?.trim() ||
+        `${phoneNumber}:${conversationId ?? ""}:${text}:${imageUrl ?? ""}`;
+      if (!claimInbound(idempotencyKey)) {
+        console.warn("[wassist] duplicate inbound ignored", {
+          phoneNumber,
+          deliveryHeader,
+          messageId: inbound.messageId,
+        });
+        return Response.json({ ok: true, duplicate: true });
+      }
+
       if (replyCallback && !isAllowedReplyCallback(replyCallback)) {
         console.warn("[wassist] rejected reply_callback host", {
           phoneNumber,
@@ -268,55 +321,32 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
 
       const deliveryKey = createDeliveryKey(phoneNumber);
 
-      // Critical: waitUntil must cover flushOutbound. send() resolves early;
-      // getEventStream replay is the wrong signal (stale session.waiting).
-      // Channel handlers signal this latch after WhatsApp delivery completes.
+      // Enqueue the turn only. Do NOT wait on an in-memory delivery latch or
+      // send a timeout apology — turn.completed runs in another isolate, so the
+      // latch never resolves and the apology was spamming WhatsApp ~50s later
+      // (often twice, because Wassist double-delivers each inbound event).
       waitUntil(
-        (async () => {
-          const delivery = armDeliveryWait(deliveryKey);
-
-          await send(content, {
-            auth: {
-              authenticator: "wassist",
-              principalType: "user",
-              principalId: phoneNumber,
-              attributes: {
-                phoneNumber,
-                replyCallback: replyCallback ?? "",
-                conversationId: conversationId ?? "",
-              },
-            },
-            continuationToken: tokenFor(phoneNumber),
-            state: freshState(
+        send(content, {
+          auth: {
+            authenticator: "wassist",
+            principalType: "user",
+            principalId: phoneNumber,
+            attributes: {
               phoneNumber,
-              replyCallback,
-              conversationId,
-              deliveryKey,
-            ),
-            title: `WhatsApp ${phoneNumber}`,
-          });
-
-          const outcome = await Promise.race([
-            delivery,
-            new Promise<"timeout">((resolve) => {
-              setTimeout(() => resolve("timeout"), DELIVERY_TIMEOUT_MS);
-            }),
-          ]);
-
-          if (outcome === "timeout" && canDeliver && abandonDelivery(deliveryKey)) {
-            try {
-              await deliverOutbound(
-                { replyCallback, conversationId },
-                {
-                  content:
-                    "Sorry — I'm taking longer than expected. Please send that again in a moment. If you feel unwell, contact your clinician or emergency services.",
-                },
-              );
-            } catch (err) {
-              console.error("[wassist] timeout fallback delivery failed", err);
-            }
-          }
-        })(),
+              replyCallback: replyCallback ?? "",
+              conversationId: conversationId ?? "",
+            },
+          },
+          continuationToken: tokenFor(phoneNumber),
+          state: freshState(
+            phoneNumber,
+            replyCallback,
+            conversationId,
+            deliveryKey,
+            idempotencyKey,
+          ),
+          title: `WhatsApp ${phoneNumber}`,
+        }).then(() => undefined),
       );
 
       // Ack fast; coach reply flushes on turn.completed via callback or REST.
@@ -340,6 +370,23 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
       channel.state.pendingButtons = null;
       channel.state.pendingImageUrl = null;
       channel.state.deliveredThisTurn = false;
+      channel.state.suppressOutbound = false;
+
+      const phone = channel.state.phoneNumber;
+      const key = channel.state.idempotencyKey;
+      if (phone && key) {
+        try {
+          if (!claimPatientInbound(phone, key)) {
+            channel.state.suppressOutbound = true;
+            console.warn("[wassist] durable duplicate inbound turn", {
+              phoneNumber: phone,
+              idempotencyKey: key,
+            });
+          }
+        } catch (err) {
+          console.warn("[wassist] inbound claim failed", err);
+        }
+      }
     },
 
     "action.result"(eventData, channel) {

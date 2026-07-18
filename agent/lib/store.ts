@@ -45,6 +45,10 @@ export type Patient = {
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
   conversationId?: string;
+  /** Recent Wassist delivery/message ids — suppress double-processed turns. */
+  recentInboundIds?: string[];
+  /** Recent outbound content fingerprints — suppress duplicate WhatsApp sends. */
+  recentOutboundFingerprints?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -194,4 +198,50 @@ export function missingOnboardingFields(patient: Patient): string[] {
   if (!patient.diet) missing.push("diet");
   if (patient.proteinTargetG == null) missing.push("proteinTargetG");
   return missing;
+}
+
+/** Claim an inbound delivery/message id. False = already processed. */
+export function claimPatientInbound(
+  phoneNumber: string,
+  inboundId: string,
+): boolean {
+  getPatient(phoneNumber);
+  let claimed = false;
+  patientState.update((p) => {
+    const recent = p.recentInboundIds ?? [];
+    if (recent.includes(inboundId)) {
+      claimed = false;
+      return p;
+    }
+    claimed = true;
+    return {
+      ...p,
+      recentInboundIds: [...recent, inboundId].slice(-40),
+      updatedAt: now(),
+    };
+  });
+  return claimed;
+}
+
+/** Claim an outbound fingerprint. False = identical text just sent. */
+export function claimPatientOutbound(
+  phoneNumber: string,
+  fingerprint: string,
+): boolean {
+  getPatient(phoneNumber);
+  let claimed = false;
+  patientState.update((p) => {
+    const recent = p.recentOutboundFingerprints ?? [];
+    if (recent.includes(fingerprint)) {
+      claimed = false;
+      return p;
+    }
+    claimed = true;
+    return {
+      ...p,
+      recentOutboundFingerprints: [...recent, fingerprint].slice(-40),
+      updatedAt: now(),
+    };
+  });
+  return claimed;
 }
