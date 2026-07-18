@@ -2,6 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import {
   normalizeCheckInFrequency,
+  normalizeCondition,
   normalizeDiet,
   normalizeDose,
   normalizeEmedSetup,
@@ -20,21 +21,29 @@ import {
 
 export default defineTool({
   description:
-    "Save onboarding answers from WhatsApp (name, medication, dose, week, diet, protein target, check-in frequency, eMed setup, motivation, side effects). Call after each answer. Accepts quick-reply ids including emed_connect / emed_no_device / emed_skip. Marks onboarding complete when all required fields are present.",
+    "Save onboarding answers from WhatsApp (name, condition, medication, dose, week, check-in frequency, eMed setup; optional diet, protein, motivation, side effects). Call after each tap. Accepts quick-reply ids (cond_*, med_*, dose_*, checkin_*, emed_*). med_other / dose_other do not save — ask the patient to type, then call again. Marks complete when required fields are present.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     conversationId: z.string().optional(),
     name: z.string().min(1).optional(),
+    condition: z
+      .string()
+      .optional()
+      .describe(
+        "Programme/condition or ids: cond_weight / cond_diabetes / cond_heart",
+      ),
     medication: z
       .string()
       .optional()
       .describe(
-        "semaglutide / tirzepatide / oral GLP-1, or ids med_semaglutide / med_tirzepatide / med_oral",
+        "Medication label or ids: med_semaglutide / med_tirzepatide / med_metformin / med_insulin / med_statin / med_bp (not med_other)",
       ),
     dose: z
       .string()
       .optional()
-      .describe("e.g. 0.25mg, 2.5mg, or ids dose_0_25 / dose_2_5 / dose_14"),
+      .describe(
+        "Dose label or ids: dose_0_25 / dose_500 / dose_10u / dose_low etc. (not dose_other)",
+      ),
     week: z
       .union([z.number().int().min(0).max(104), z.string().min(1)])
       .optional()
@@ -42,11 +51,15 @@ export default defineTool({
     diet: z
       .string()
       .optional()
-      .describe("omnivore/vegetarian/vegan, or quick-reply id diet_vegetarian"),
+      .describe(
+        "Optional: omnivore/vegetarian/vegan, or quick-reply id diet_vegetarian",
+      ),
     proteinTargetG: z
       .union([z.number().int().min(40).max(250), z.string().min(1)])
       .optional()
-      .describe("Daily protein grams, or quick-reply id like protein_90 / ~105g"),
+      .describe(
+        "Optional daily protein grams, or quick-reply id like protein_90 / ~105g",
+      ),
     checkInFrequency: z
       .string()
       .optional()
@@ -77,11 +90,28 @@ export default defineTool({
     if (input.conversationId) patch.conversationId = input.conversationId;
     if (input.name !== undefined) patch.name = input.name.trim();
 
-    const medication = normalizeMedication(input.medication);
-    if (medication !== undefined) patch.medication = medication;
+    const condition = normalizeCondition(input.condition);
+    if (condition !== undefined) patch.condition = condition;
 
-    const dose = normalizeDose(input.dose);
-    if (dose !== undefined) patch.dose = dose;
+    if (input.medication !== undefined) {
+      const medication = normalizeMedication(input.medication);
+      if (medication === undefined) {
+        throw new Error(
+          "med_other / Other needs a typed medication name — ask the patient, then call again with the name",
+        );
+      }
+      patch.medication = medication;
+    }
+
+    if (input.dose !== undefined) {
+      const dose = normalizeDose(input.dose);
+      if (dose === undefined) {
+        throw new Error(
+          "dose_other / Other needs a typed dose — ask the patient, then call again with the dose",
+        );
+      }
+      patch.dose = dose;
+    }
 
     const week = normalizeWeek(input.week);
     if (week !== undefined) {
@@ -165,6 +195,7 @@ export default defineTool({
       emedConnectSummary,
       profile: {
         name: patient.name,
+        condition: patient.condition,
         medication: patient.medication,
         dose: patient.dose,
         week: patient.week,

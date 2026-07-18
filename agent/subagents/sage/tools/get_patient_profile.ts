@@ -21,6 +21,7 @@ export default defineTool({
       onboardingComplete: missing.length === 0 && p.onboardingStatus === "complete",
       missingOnboardingFields: missing,
       name: p.name,
+      condition: p.condition,
       week: p.week,
       dose: p.dose,
       medication: p.medication,

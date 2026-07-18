@@ -1,7 +1,7 @@
 {
   "name": "scout-and-sage",
   "version": "0.1.0",
-  "description": "Scout & Sage — WhatsApp GLP-1 dual AI companion + clinician (Wassist webhooks + Vercel Eve)",
+  "description": "Scout & Sage — WhatsApp dual AI care companion + clinician (Wassist webhooks + Vercel Eve)",
   "type": "module",
   "imports": {
     "#*": "./agent/*",

@@ -23,7 +23,7 @@ export async function generateMealUpgradeImage(opts: {
 
   const prompt = [
     "Photorealistic top-down photo of the same lunch plate,",
-    `upgraded to hit about ${opts.proteinTargetG}g protein (was ~${opts.currentProteinG}g).`,
+    `upgraded toward about ${opts.proteinTargetG}g protein (was ~${opts.currentProteinG}g).`,
     `Meal context: ${opts.mealDescription}.`,
     dietLine,
     "Natural lighting, appetizing, no text overlay, no logos.",
