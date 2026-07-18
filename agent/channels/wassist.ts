@@ -274,21 +274,9 @@ export default defineChannel<ChannelState, Ctx, Target>({
     /**
      * Demo: wipe all patient sessions by bumping the session epoch.
      * Next WhatsApp message for any phone starts a blank onboarding profile.
-     * Header: x-demo-reset-secret: <DEMO_RESET_SECRET>
+     * Open on purpose for hackathon demos — no auth.
      */
-    POST("/reset-all", async (req) => {
-      const secret = process.env.DEMO_RESET_SECRET?.trim();
-      if (!secret) {
-        return Response.json(
-          { error: "DEMO_RESET_SECRET is not configured" },
-          { status: 503 },
-        );
-      }
-      const provided = req.headers.get("x-demo-reset-secret")?.trim() ?? "";
-      if (provided !== secret) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
-
+    POST("/reset-all", async () => {
       const previousEpoch = getSessionEpoch();
       const sessionEpoch = bumpSessionEpoch();
 
