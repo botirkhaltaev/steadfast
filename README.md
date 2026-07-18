@@ -20,7 +20,7 @@ WhatsApp
    │
    ▼
 Wassist platform webhook (signed)
-   │ POST /webhook
+   │ POST /eve/v1/wassist/webhook
    ▼
 Eve root agent — Scout  (agent/)
    instructions.md   — onboarding + coach + when to call Sage / escalate
@@ -32,13 +32,13 @@ Eve root agent — Scout  (agent/)
    │
    ▼
 Next.js clinician UI  (app/)  ← same origin via withEve
-   GET  /clinician/escalations
-   GET  /clinician/escalations/:id/messages
-   POST /clinician/escalations/:id/messages  → Wassist sendMessage
-   POST /clinician/escalations/:id/resolve   → return thread to Scout
+   GET  /eve/v1/clinician/escalations
+   GET  /eve/v1/clinician/escalations/:id/messages
+   POST /eve/v1/clinician/escalations/:id/messages  → Wassist sendMessage
+   POST /eve/v1/clinician/escalations/:id/resolve   → return thread to Scout
 ```
 
-`next.config.mjs` wraps the app with [`withEve`](https://eve.dev/docs/guides/frontend/nextjs) so `npm run dev` boots Next + Eve together. Custom channel routes (`/webhook`, `/clinician/*`, `/health`, …) are rewritten to the Eve process (withEve alone only mounts `/eve/v1/*`).
+`next.config.mjs` wraps the app with [`withEve`](https://eve.dev/docs/guides/frontend/nextjs) so `npm run dev` boots Next + Eve together. withEve proxies `/eve/v1/**` to the Eve service — custom channel routes are authored under that prefix (same pattern as Slack/Telegram/etc.).
 
 ## Clinician UI
 
@@ -103,7 +103,7 @@ Patients explicitly choose during onboarding. **Connect** links per-user eMed he
 ### Wire Wassist
 
 1. Create a webhook at [wassist.app/developers/webhooks](https://wassist.app/developers/webhooks)
-2. URL: your deploy host + `/webhook`
+2. URL: your deploy host + `/eve/v1/wassist/webhook`
 3. Subscribe to `message.received`
 4. Copy the signing secret into `WASSIST_WEBHOOK_SECRET`
 5. Point your number’s routing at this integration (**one** webhook — do not also attach a second BYOA/agent webhook to the same URL)
@@ -111,7 +111,7 @@ Patients explicitly choose during onboarding. **Connect** links per-user eMed he
 
 ## Deploy
 
-This repo is a **Next.js + Eve** project. Deploy the Next app to Vercel; `withEve` wires the Eve service and `/eve/v1/*`. Channel routes (`/webhook`, `/clinician/*`, …) are patched into the Vercel output config at build time.
+This repo is a **Next.js + Eve** project. Deploy the Next app to Vercel; `withEve` wires the Eve service and proxies `/eve/v1/**` (including Wassist + clinician channel routes).
 
 ```bash
 npm run build
@@ -127,14 +127,14 @@ Env vars:
 - `CLINICIAN_WEBHOOK_URL` (optional Slack/PagerDuty notify on escalate)
 - `NEXT_PUBLIC_EVE_URL` (optional; only if UI is not same-origin)
 
-Health: `GET /health` · Eve: `GET /eve/v1/health` · Inbox: `GET /`
+Health: `GET /eve/v1/wassist/health` · Eve: `GET /eve/v1/health` · Inbox: `GET /`
 
 ### Demo reset (wipe all sessions)
 
 Patient data lives in Eve durable **sessions** (not a separate Postgres). Restarting the app does **not** clear them. To demo from scratch:
 
 ```bash
-curl -X POST https://<your-host>/reset-all
+curl -X POST https://<your-host>/eve/v1/wassist/reset-all
 ```
 
 This bumps a session epoch so every phone gets a **new** Eve session on the next WhatsApp message (blank onboarding / eMed). Open endpoint — no auth (hackathon demos).
@@ -142,7 +142,7 @@ This bumps a session epoch so every phone gets a **new** Eve session on the next
 ## Demo (live WhatsApp + clinician inbox)
 
 1. New chat → onboarding with quick replies (condition, frequency, eMed Connect) → confirm profile
-2. Agent-initiated check-in on their cadence (or `POST /proactive-checkin`)
+2. Agent-initiated check-in on their cadence (or `POST /eve/v1/wassist/proactive-checkin`)
 3. “Rough week, side effects, skipped a dose” → Scout coaches; may consult Sage on risk
 4. If they connected eMed → Scout consults Sage → Sage pulls that user’s biomarkers
 5. Optional: lunch photo → protein estimate + Runware upgrade image

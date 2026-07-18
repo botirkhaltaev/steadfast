@@ -30,13 +30,14 @@ export type ThreadMessage = {
 };
 
 /**
- * Same-origin clinician APIs — Next + Eve share one origin via withEve
- * (and channel-path rewrites for /clinician/*).
+ * Same-origin clinician APIs under `/eve/v1/*` (withEve proxies that prefix).
  */
 function apiBase(): string {
   if (typeof window !== "undefined") return "";
   return process.env.NEXT_PUBLIC_EVE_URL?.replace(/\/$/, "") ?? "";
 }
+
+const CLINICIAN_API = "/eve/v1/clinician";
 
 async function parseJson<T>(res: Response): Promise<T> {
   const data = (await res.json().catch(() => ({}))) as T & {
@@ -56,7 +57,7 @@ async function parseJson<T>(res: Response): Promise<T> {
 }
 
 export async function listEscalations(): Promise<Escalation[]> {
-  const res = await fetch(`${apiBase()}/clinician/escalations`, {
+  const res = await fetch(`${apiBase()}${CLINICIAN_API}/escalations`, {
     cache: "no-store",
   });
   const data = await parseJson<{ escalations: Escalation[] }>(res);
@@ -65,7 +66,7 @@ export async function listEscalations(): Promise<Escalation[]> {
 
 export async function getEscalation(id: string): Promise<Escalation> {
   const res = await fetch(
-    `${apiBase()}/clinician/escalations/${encodeURIComponent(id)}`,
+    `${apiBase()}${CLINICIAN_API}/escalations/${encodeURIComponent(id)}`,
     { cache: "no-store" },
   );
   const data = await parseJson<{ escalation: Escalation }>(res);
@@ -76,7 +77,7 @@ export async function listEscalationMessages(
   id: string,
 ): Promise<ThreadMessage[]> {
   const res = await fetch(
-    `${apiBase()}/clinician/escalations/${encodeURIComponent(id)}/messages`,
+    `${apiBase()}${CLINICIAN_API}/escalations/${encodeURIComponent(id)}/messages`,
     { cache: "no-store" },
   );
   const data = await parseJson<{ messages: ThreadMessage[] }>(res);
@@ -88,7 +89,7 @@ export async function sendEscalationMessage(
   text: string,
 ): Promise<void> {
   const res = await fetch(
-    `${apiBase()}/clinician/escalations/${encodeURIComponent(id)}/messages`,
+    `${apiBase()}${CLINICIAN_API}/escalations/${encodeURIComponent(id)}/messages`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -100,7 +101,7 @@ export async function sendEscalationMessage(
 
 export async function resolveEscalation(id: string): Promise<Escalation> {
   const res = await fetch(
-    `${apiBase()}/clinician/escalations/${encodeURIComponent(id)}/resolve`,
+    `${apiBase()}${CLINICIAN_API}/escalations/${encodeURIComponent(id)}/resolve`,
     { method: "POST" },
   );
   const data = await parseJson<{ escalation: Escalation }>(res);
