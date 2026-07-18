@@ -187,7 +187,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
         waitUntil(
           sendMessage(inbound.conversationId, {
             content:
-              "Steadfast isn't fully configured yet. Please try again shortly.",
+              "Scout & Sage isn't fully configured yet. Please try again shortly.",
           }).catch((err) => {
             console.error("[wassist] config notice failed", err);
           }),
@@ -224,7 +224,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
     GET("/health", async () =>
       Response.json({
         ok: true,
-        service: "steadfast-wassist",
+        service: "scout-sage-wassist",
         webhook: "/webhook",
         authConfigured: Boolean(process.env.WASSIST_WEBHOOK_SECRET),
         modelConfigured: hasModelCredentials(),

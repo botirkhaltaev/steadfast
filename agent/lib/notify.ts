@@ -1,8 +1,9 @@
 import type { EscalationCard } from "#lib/store";
 
 /**
- * Notify humans about a clinical escalation.
+ * Future: notify humans about a clinical escalation.
  * Prefers CLINICIAN_WEBHOOK_URL (Slack/PagerDuty/custom); no-ops with a clear result if unset.
+ * Unused by Scout/Sage live path today — human handoff is deferred.
  */
 export async function notifyClinicians(card: EscalationCard): Promise<{
   notified: boolean;
@@ -23,7 +24,7 @@ export async function notifyClinicians(card: EscalationCard): Promise<{
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      type: "steadfast.escalation",
+      type: "scout_sage.escalation",
       urgency: card.urgency,
       redFlag: card.redFlag,
       patient: {

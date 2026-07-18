@@ -1,10 +1,19 @@
 import { defineState } from "eve/context";
+import {
+  buildEmedSeedForPatient,
+  emedReadingsLastDays,
+  latestEmedReading,
+  type EmedDeviceLink,
+  type EmedReading,
+} from "#lib/emed";
 import { normalizePhone } from "#lib/phone";
 
 export type DropoutRisk = "low" | "medium" | "high";
 export type OnboardingStatus = "not_started" | "in_progress" | "complete";
-/** How often Steadfast proactively messages the patient. */
+/** How often Scout proactively messages the patient. */
 export type CheckInFrequency = "daily" | "every_few_days" | "weekly";
+/** eMed step during WhatsApp onboarding — required before coaching. */
+export type EmedSetupStatus = "pending" | "linked" | "no_device" | "skipped";
 
 const CHECK_IN_INTERVAL_DAYS: Record<CheckInFrequency, number> = {
   daily: 1,
@@ -22,6 +31,7 @@ export type CheckIn = {
   resistanceSessions?: number;
 };
 
+/** Future human-clinician handoff card. Kept for deferred escalation path. */
 export type EscalationCard = {
   id: string;
   phoneNumber: string;
@@ -36,6 +46,29 @@ export type EscalationCard = {
   status: "open" | "notified";
   createdAt: string;
   updatedAt: string;
+};
+
+/** AI clinician (Sage) brief persisted for Scout coordination. */
+export type SageBrief = {
+  id: string;
+  phoneNumber: string;
+  reason:
+    | "red_flag"
+    | "dropout_risk"
+    | "side_effect"
+    | "adherence"
+    | "checkin_review"
+    | "biomarker_review"
+    | "other";
+  urgency: "routine" | "urgent" | "emergency";
+  riskRead: DropoutRisk;
+  /** Guidance for Scout's next coaching moves (not shown verbatim to patient). */
+  coachingGuidance: string;
+  /** Short points Scout may paraphrase to the patient. */
+  patientSafeMessagePoints: string[];
+  /** One-line clinical-style summary for the durable record. */
+  summary: string;
+  createdAt: string;
 };
 
 export type Patient = {
@@ -53,6 +86,13 @@ export type Patient = {
   checkins: CheckIn[];
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
+  sageBriefs: SageBrief[];
+  /** Required onboarding answer for eMed connect step. */
+  emedSetupStatus: EmedSetupStatus;
+  /** Linked eMed home monitor after patient chooses Connect. */
+  emedDevice: EmedDeviceLink | null;
+  /** Durable biomarker readings from the linked eMed device. */
+  emedReadings: EmedReading[];
   conversationId?: string;
   /** ISO timestamp of last agent-initiated check-in. */
   lastProactiveCheckInAt?: string;
@@ -61,6 +101,8 @@ export type Patient = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type { EmedDeviceLink, EmedReading };
 
 function now() {
   return new Date().toISOString();
@@ -83,6 +125,10 @@ function blankPatient(phoneNumber = ""): Patient {
     checkins: [],
     dropoutRisk: "low",
     escalations: [],
+    sageBriefs: [],
+    emedSetupStatus: "pending",
+    emedDevice: null,
+    emedReadings: [],
     createdAt: ts,
     updatedAt: ts,
   };
@@ -92,7 +138,7 @@ function blankPatient(phoneNumber = ""): Patient {
  * Durable per-WhatsApp-session patient record (Eve workflow state).
  * Sessions are keyed by phone via the Wassist channel continuation token.
  */
-export const patientState = defineState("steadfast.patient", () => blankPatient());
+export const patientState = defineState("scout_sage.patient", () => blankPatient());
 
 export function getPatient(phoneNumber: string): Patient {
   const phone = normalizePhone(phoneNumber);
@@ -145,6 +191,81 @@ export function addCheckIn(phoneNumber: string, checkin: CheckIn): Patient {
   return patientState.get();
 }
 
+export function saveSageBrief(
+  input: Omit<SageBrief, "id" | "createdAt">,
+): SageBrief {
+  const ts = now();
+  const brief: SageBrief = {
+    ...input,
+    phoneNumber: normalizePhone(input.phoneNumber),
+    id: crypto.randomUUID(),
+    createdAt: ts,
+  };
+  getPatient(brief.phoneNumber);
+  patientState.update((p) => ({
+    ...p,
+    sageBriefs: [...p.sageBriefs, brief].slice(-20),
+    updatedAt: ts,
+  }));
+  return brief;
+}
+
+export function getEmedDevice(phoneNumber: string): EmedDeviceLink | null {
+  return getPatient(phoneNumber).emedDevice;
+}
+
+export function listEmedReadings(
+  phoneNumber: string,
+  days = 7,
+): { device: EmedDeviceLink | null; latest: EmedReading | null; trend: EmedReading[] } {
+  const patient = getPatient(phoneNumber);
+  const trend = emedReadingsLastDays(patient.emedReadings, days);
+  return {
+    device: patient.emedDevice,
+    latest: latestEmedReading(patient.emedReadings),
+    trend,
+  };
+}
+
+/** Onboarding: patient chose Connect — link device and sync stand-in readings. */
+export function linkEmedDevice(phoneNumber: string): {
+  patient: Patient;
+  connectSummary: { deviceLabel: string; weightKg: number; asOf: string };
+} {
+  const phone = normalizePhone(phoneNumber);
+  getPatient(phone);
+  const seed = buildEmedSeedForPatient(phone, now());
+  const latest = latestEmedReading(seed.readings);
+  if (!latest) {
+    throw new Error("eMed connect seed produced no readings");
+  }
+  const patient = updatePatient(phone, {
+    emedSetupStatus: "linked",
+    emedDevice: seed.device,
+    emedReadings: seed.readings,
+  });
+  return {
+    patient,
+    connectSummary: {
+      deviceLabel: seed.device.label,
+      weightKg: latest.weightKg,
+      asOf: latest.at,
+    },
+  };
+}
+
+/** Onboarding: patient chose no device or not now. */
+export function setEmedSetupSkipped(
+  phoneNumber: string,
+  status: "no_device" | "skipped",
+): Patient {
+  return updatePatient(phoneNumber, {
+    emedSetupStatus: status,
+    emedDevice: null,
+    emedReadings: [],
+  });
+}
+
 export function createEscalation(
   input: Omit<EscalationCard, "id" | "createdAt" | "updatedAt" | "status">,
 ): EscalationCard {
@@ -189,12 +310,19 @@ export function computeRiskScore(patient: Patient): DropoutRisk {
   const latest = patient.checkins[patient.checkins.length - 1];
   const notes = (latest?.notes ?? "").toLowerCase();
   const severity = latest?.sideEffectSeverity ?? 0;
-  const score =
+  let score =
     (latest?.missedDoses && latest.missedDoses > 0 ? 2 : 0) +
     (severity >= 7 ? 2 : severity >= 4 ? 1 : 0) +
     (notes.includes("stop") ? 2 : 0) +
     (notes.includes("cost") ? 1 : 0) +
     (patient.week != null && patient.week >= 12 && patient.week <= 24 ? 1 : 0);
+
+  // Stored eMed readings (when linked) can nudge risk — clinical review still belongs to Sage.
+  const emedLatest = latestEmedReading(patient.emedReadings);
+  if (emedLatest) {
+    if (emedLatest.glucoseMmolL >= 7.0) score += 1;
+    if (emedLatest.restingHrBpm >= 85) score += 1;
+  }
 
   if (score >= 4) return "high";
   if (score >= 2) return "medium";
@@ -210,6 +338,7 @@ export function missingOnboardingFields(patient: Patient): string[] {
   if (!patient.diet) missing.push("diet");
   if (patient.proteinTargetG == null) missing.push("proteinTargetG");
   if (!patient.checkInFrequency) missing.push("checkInFrequency");
+  if (patient.emedSetupStatus === "pending") missing.push("emedSetup");
   return missing;
 }
 

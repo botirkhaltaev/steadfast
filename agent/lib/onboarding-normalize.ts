@@ -3,7 +3,7 @@
  * Keeps onboarding resilient when the model passes button ids through literally.
  */
 
-import type { CheckInFrequency } from "#lib/store";
+import type { CheckInFrequency, EmedSetupStatus } from "#lib/store";
 
 const DIET_ALIASES: Record<string, string> = {
   diet_omnivore: "omnivore",
@@ -199,4 +199,29 @@ export function normalizeSideEffectNote(
     return { note: "mild nausea" };
   }
   return { note: raw.trim() };
+}
+
+const EMED_SETUP_ALIASES: Record<string, Exclude<EmedSetupStatus, "pending">> = {
+  emed_connect: "linked",
+  connect: "linked",
+  "connect emed": "linked",
+  "connect my emed": "linked",
+  emed_no_device: "no_device",
+  "no device": "no_device",
+  "i don't have one": "no_device",
+  "i dont have one": "no_device",
+  "don't have one": "no_device",
+  emed_skip: "skipped",
+  "not now": "skipped",
+  later: "skipped",
+};
+
+/** Maps eMed onboarding quick-reply ids/labels to setup status (not pending). */
+export function normalizeEmedSetup(
+  raw: string | undefined,
+): Exclude<EmedSetupStatus, "pending"> | undefined {
+  if (raw == null) return undefined;
+  const key = raw.trim().toLowerCase();
+  if (!key) return undefined;
+  return EMED_SETUP_ALIASES[key];
 }
