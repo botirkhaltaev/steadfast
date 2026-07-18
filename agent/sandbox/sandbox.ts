@@ -1,7 +1,7 @@
-import { defineSandbox } from "eve/sandbox";
-import { justbash } from "eve/sandbox/just-bash";
+import { defineSandbox, defaultBackend } from "eve/sandbox";
 
-// Dependency-free local sandbox. Shell/file tools are disabled for this health agent.
+// Environment-aware backend: Vercel Sandbox on Vercel, local elsewhere.
+// Image attachments stage into the sandbox even when shell/file tools are disabled.
 export default defineSandbox({
-  backend: justbash(),
+  backend: defaultBackend(),
 });
