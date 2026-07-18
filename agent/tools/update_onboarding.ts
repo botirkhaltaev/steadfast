@@ -4,6 +4,7 @@ import {
   normalizeCheckInFrequency,
   normalizeDiet,
   normalizeDose,
+  normalizeEmedSetup,
   normalizeMedication,
   normalizeMotivation,
   normalizeProteinTargetG,
@@ -11,13 +12,15 @@ import {
   normalizeWeek,
 } from "#lib/onboarding-normalize";
 import {
+  linkEmedDevice,
   missingOnboardingFields,
+  setEmedSetupSkipped,
   updatePatient,
 } from "#lib/store";
 
 export default defineTool({
   description:
-    "Save onboarding answers from WhatsApp (name, medication, dose, week, diet, protein target, check-in frequency, motivation, side effects). Call after each answer or batch when several arrive. Accepts quick-reply ids: med_*, dose_*, week_*, diet_*, protein_*, checkin_*, side_*, mot_*. Marks onboarding complete when all required fields are present.",
+    "Save onboarding answers from WhatsApp (name, medication, dose, week, diet, protein target, check-in frequency, eMed setup, motivation, side effects). Call after each answer. Accepts quick-reply ids including emed_connect / emed_no_device / emed_skip. Marks onboarding complete when all required fields are present.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     conversationId: z.string().optional(),
@@ -49,6 +52,12 @@ export default defineTool({
       .optional()
       .describe(
         "How often to proactively check in: daily | every_few_days | weekly, or ids checkin_daily / checkin_few_days / checkin_weekly",
+      ),
+    emedSetup: z
+      .string()
+      .optional()
+      .describe(
+        "eMed onboarding choice: emed_connect | emed_no_device | emed_skip (or labels Connect eMed / I don't have one / Not now)",
       ),
     motivation: z
       .string()
@@ -113,7 +122,26 @@ export default defineTool({
     const motivation = normalizeMotivation(input.motivation);
     if (motivation !== undefined) patch.motivation = motivation;
 
-    const afterPatch = updatePatient(input.phoneNumber, patch);
+    let afterPatch = updatePatient(input.phoneNumber, patch);
+    let emedConnectSummary:
+      | { deviceLabel: string; weightKg: number; asOf: string }
+      | null = null;
+
+    if (input.emedSetup !== undefined) {
+      const emedStatus = normalizeEmedSetup(input.emedSetup);
+      if (!emedStatus) {
+        throw new Error(
+          `Could not parse eMed setup from "${input.emedSetup}" — use emed_connect, emed_no_device, or emed_skip`,
+        );
+      }
+      if (emedStatus === "linked") {
+        const linked = linkEmedDevice(input.phoneNumber);
+        afterPatch = linked.patient;
+        emedConnectSummary = linked.connectSummary;
+      } else {
+        afterPatch = setEmedSetupSkipped(input.phoneNumber, emedStatus);
+      }
+    }
 
     const sideEffect = normalizeSideEffectNote(input.sideEffectNote);
     const afterSideEffects =
@@ -132,6 +160,9 @@ export default defineTool({
     return {
       onboardingStatus: patient.onboardingStatus,
       missingOnboardingFields: missing,
+      emedSetupStatus: patient.emedSetupStatus,
+      emedDeviceLinked: patient.emedSetupStatus === "linked",
+      emedConnectSummary,
       profile: {
         name: patient.name,
         medication: patient.medication,
@@ -140,6 +171,7 @@ export default defineTool({
         diet: patient.diet,
         proteinTargetG: patient.proteinTargetG,
         checkInFrequency: patient.checkInFrequency,
+        emedSetupStatus: patient.emedSetupStatus,
         motivation: patient.motivation,
       },
     };

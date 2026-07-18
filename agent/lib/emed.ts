@@ -18,7 +18,7 @@ export type EmedReading = {
   bpDiastolicMmHg: number;
 };
 
-/** Stable per-patient device id from phone (no shared demo device). */
+/** Stable per-patient device id from phone. */
 export function emedDeviceIdForPhone(phoneNumber: string): string {
   const phone = normalizePhone(phoneNumber);
   const digits = phone.replace(/\D/g, "");
@@ -27,9 +27,8 @@ export function emedDeviceIdForPhone(phoneNumber: string): string {
 }
 
 /**
- * One-time seed of eMed device + readings for a patient signup.
- * Stored in durable state; tools read rows — not regenerated each call.
- * Stand-in until a live eMed API is wired.
+ * Readings written when the patient chooses Connect during onboarding.
+ * Stand-in for a live eMed sync after pairing (API not wired yet).
  */
 export function buildEmedSeedForPatient(
   phoneNumber: string,
@@ -40,7 +39,6 @@ export function buildEmedSeedForPatient(
 } {
   const phone = normalizePhone(phoneNumber);
   const base = new Date(linkedAt);
-  // Small per-user offset so two phones don't share identical series.
   const digits = phone.replace(/\D/g, "");
   const offset = Number(digits.slice(-2) || "0") % 5;
 

@@ -26,8 +26,8 @@ Wassist platform webhook (signed)
    ▼
 Eve root agent — Scout
    instructions.md   — onboarding + coach + when to call Sage
-   defineState       — durable patient profile (+ sageBriefs, emedDevice, emedReadings)
-   tools/            — onboarding, choices, check-in, vision, WhatsApp (no eMed tools)
+   defineState       — durable patient (+ sageBriefs, emedSetupStatus, emedDevice, emedReadings)
+   tools/            — onboarding (incl. eMed connect), choices, check-in, vision, WhatsApp
    schedules/        — daily sweep; check-ins honor chosen cadence
    │
    ├──► Sage (subagent) — clinical briefs, risk, eMed biomarker review
@@ -43,13 +43,15 @@ One inbound path (signed platform events). One outbound path (REST). Scout is th
 
 ## Onboarding (in WhatsApp)
 
-New numbers start with an empty durable profile.
+New numbers start with an empty durable profile (`emedSetupStatus: pending`).
 
-1. Welcome + disclose you're not a doctor (Scout; Sage partners behind the scenes)  
-2. One question at a time: name (typed) → medication → dose → week → diet → protein → **check-in frequency**  
+1. Welcome + disclose you're not a doctor (Scout; Sage partners; eMed can connect)  
+2. One question at a time: name (typed) → medication → dose → week → diet → protein → **check-in frequency** → **eMed setup**  
 3. Almost everything uses WhatsApp **quick-reply buttons** (`offer_choices`, max 3) — only name needs typing  
-4. Saves via `update_onboarding` until complete  
-5. Confirms summary + explains that **Scout will message them** on that cadence  
+4. **eMed step (required):** Connect eMed / I don't have one / Not now (`emed_connect`, `emed_no_device`, `emed_skip`)  
+5. Connect writes that user’s device + readings into durable state (stand-in until live eMed API)  
+6. Saves via `update_onboarding` until complete  
+7. One confirmation summary: cadence + eMed outcome (linked / no device / skipped)  
 
 Coaching, meal vision, and risk scoring unlock only after onboarding completes.
 
@@ -77,9 +79,9 @@ npm install
 npm run dev
 ```
 
-### eMed device (per patient)
+### eMed device (onboarding)
 
-When a patient signs up via WhatsApp (their phone is the account key), Eve durable state gets a **per-user** eMed monitor link + ~7 days of readings. Stand-in until a live eMed API is wired. **Sage** reads them via `get_emed_device` / `get_emed_biomarkers`. Scout only sees `emedDeviceLinked` and consults Sage for biomarker context.
+Patients explicitly choose during onboarding. **Connect** links a per-user eMed monitor and stores readings in Eve state (sync stand-in). Skip / no device leaves them unlinked. **Sage** reads linked data via `get_emed_device` / `get_emed_biomarkers`. Scout connects via `update_onboarding` only — no clinical read tools.
 
 ### Wire Wassist
 
@@ -109,10 +111,10 @@ Eve: `GET /eve/v1/health`
 
 ## Demo (live WhatsApp)
 
-1. New chat → onboarding with quick replies (incl. check-in frequency) → confirm profile  
+1. New chat → onboarding with quick replies (incl. eMed Connect) → confirm profile  
 2. Agent-initiated check-in on their cadence (or `POST /proactive-checkin`)  
 3. “Rough week, nauseous, skipped a dose” → Scout coaches; may consult Sage on risk  
-4. After signup → patient has eMed device in state → Scout consults Sage → Sage pulls that user’s biomarkers  
+4. If they connected eMed → Scout consults Sage → Sage pulls that user’s biomarkers  
 5. Lunch photo → protein estimate + Runware upgrade image  
 6. “Bad stomach pain” → Scout stops coaching → consults Sage → patient-safe next steps (no human handoff yet)  
 

@@ -12,6 +12,8 @@ export type DropoutRisk = "low" | "medium" | "high";
 export type OnboardingStatus = "not_started" | "in_progress" | "complete";
 /** How often Scout proactively messages the patient. */
 export type CheckInFrequency = "daily" | "every_few_days" | "weekly";
+/** eMed step during WhatsApp onboarding — required before coaching. */
+export type EmedSetupStatus = "pending" | "linked" | "no_device" | "skipped";
 
 const CHECK_IN_INTERVAL_DAYS: Record<CheckInFrequency, number> = {
   daily: 1,
@@ -85,7 +87,9 @@ export type Patient = {
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
   sageBriefs: SageBrief[];
-  /** Linked eMed home monitor, if any. */
+  /** Required onboarding answer for eMed connect step. */
+  emedSetupStatus: EmedSetupStatus;
+  /** Linked eMed home monitor after patient chooses Connect. */
   emedDevice: EmedDeviceLink | null;
   /** Durable biomarker readings from the linked eMed device. */
   emedReadings: EmedReading[];
@@ -122,6 +126,7 @@ function blankPatient(phoneNumber = ""): Patient {
     dropoutRisk: "low",
     escalations: [],
     sageBriefs: [],
+    emedSetupStatus: "pending",
     emedDevice: null,
     emedReadings: [],
     createdAt: ts,
@@ -135,20 +140,6 @@ function blankPatient(phoneNumber = ""): Patient {
  */
 export const patientState = defineState("scout_sage.patient", () => blankPatient());
 
-/** On signup / first load, each patient gets their own eMed device + readings in state. */
-function seedEmedForPatientIfNeeded(phone: string): void {
-  const current = patientState.get();
-  if (current.emedDevice) return;
-
-  const seed = buildEmedSeedForPatient(phone, now());
-  patientState.update((p) => ({
-    ...p,
-    emedDevice: seed.device,
-    emedReadings: seed.readings,
-    updatedAt: now(),
-  }));
-}
-
 export function getPatient(phoneNumber: string): Patient {
   const phone = normalizePhone(phoneNumber);
   if (!phone) {
@@ -159,7 +150,6 @@ export function getPatient(phoneNumber: string): Patient {
 
   if (!current.phoneNumber) {
     patientState.update(() => blankPatient(phone));
-    seedEmedForPatientIfNeeded(phone);
     return patientState.get();
   }
 
@@ -176,7 +166,6 @@ export function getPatient(phoneNumber: string): Patient {
     patientState.update((p) => ({ ...p, phoneNumber: phone, updatedAt: now() }));
   }
 
-  seedEmedForPatientIfNeeded(phone);
   return patientState.get();
 }
 
@@ -236,6 +225,45 @@ export function listEmedReadings(
     latest: latestEmedReading(patient.emedReadings),
     trend,
   };
+}
+
+/** Onboarding: patient chose Connect — link device and sync stand-in readings. */
+export function linkEmedDevice(phoneNumber: string): {
+  patient: Patient;
+  connectSummary: { deviceLabel: string; weightKg: number; asOf: string };
+} {
+  const phone = normalizePhone(phoneNumber);
+  getPatient(phone);
+  const seed = buildEmedSeedForPatient(phone, now());
+  const latest = latestEmedReading(seed.readings);
+  if (!latest) {
+    throw new Error("eMed connect seed produced no readings");
+  }
+  const patient = updatePatient(phone, {
+    emedSetupStatus: "linked",
+    emedDevice: seed.device,
+    emedReadings: seed.readings,
+  });
+  return {
+    patient,
+    connectSummary: {
+      deviceLabel: seed.device.label,
+      weightKg: latest.weightKg,
+      asOf: latest.at,
+    },
+  };
+}
+
+/** Onboarding: patient chose no device or not now. */
+export function setEmedSetupSkipped(
+  phoneNumber: string,
+  status: "no_device" | "skipped",
+): Patient {
+  return updatePatient(phoneNumber, {
+    emedSetupStatus: status,
+    emedDevice: null,
+    emedReadings: [],
+  });
 }
 
 export function createEscalation(
@@ -310,6 +338,7 @@ export function missingOnboardingFields(patient: Patient): string[] {
   if (!patient.diet) missing.push("diet");
   if (patient.proteinTargetG == null) missing.push("proteinTargetG");
   if (!patient.checkInFrequency) missing.push("checkInFrequency");
+  if (patient.emedSetupStatus === "pending") missing.push("emedSetup");
   return missing;
 }
 
