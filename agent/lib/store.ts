@@ -31,10 +31,13 @@ export type CheckIn = {
   resistanceSessions?: number;
 };
 
-/** Human-clinician handoff card (not live; Sage is the clinical path). */
+export type HandoffStatus = "ai" | "human";
+
+/** Human-clinician handoff card (also mirrored to the global escalation queue). */
 export type EscalationCard = {
   id: string;
   phoneNumber: string;
+  conversationId: string;
   patientName: string;
   week: number | null;
   dose: string | null;
@@ -43,7 +46,7 @@ export type EscalationCard = {
   summary: string;
   transcriptSnippet: string;
   redFlag: string;
-  status: "open" | "notified";
+  status: "open" | "notified" | "resolved";
   createdAt: string;
   updatedAt: string;
 };
@@ -90,6 +93,8 @@ export type Patient = {
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
   sageBriefs: SageBrief[];
+  /** Who owns the WhatsApp thread: Scout/Sage (ai) or human clinician. */
+  handoffStatus: HandoffStatus;
   /** Required onboarding answer for eMed connect step. */
   emedSetupStatus: EmedSetupStatus;
   /** Linked eMed health data after patient chooses Connect. */
@@ -130,6 +135,7 @@ function blankPatient(phoneNumber = ""): Patient {
     dropoutRisk: "low",
     escalations: [],
     sageBriefs: [],
+    handoffStatus: "ai",
     emedSetupStatus: "pending",
     emedDevice: null,
     emedReadings: [],
@@ -276,6 +282,7 @@ export function createEscalation(
   const card: EscalationCard = {
     ...input,
     phoneNumber: normalizePhone(input.phoneNumber),
+    conversationId: input.conversationId.trim(),
     id: crypto.randomUUID(),
     status: "open",
     createdAt: ts,
@@ -285,6 +292,8 @@ export function createEscalation(
   patientState.update((p) => ({
     ...p,
     escalations: [...p.escalations, card],
+    handoffStatus: "human",
+    conversationId: card.conversationId || p.conversationId,
     updatedAt: ts,
   }));
   return card;
@@ -299,6 +308,26 @@ export function markEscalationNotified(phoneNumber: string, escalationId: string
     ),
     updatedAt: now(),
   }));
+}
+
+export function markEscalationResolved(phoneNumber: string, escalationId: string): void {
+  getPatient(phoneNumber);
+  const ts = now();
+  patientState.update((p) => ({
+    ...p,
+    escalations: p.escalations.map((e) =>
+      e.id === escalationId ? { ...e, status: "resolved" as const, updatedAt: ts } : e,
+    ),
+    handoffStatus: "ai",
+    updatedAt: ts,
+  }));
+}
+
+export function setHandoffStatus(
+  phoneNumber: string,
+  handoffStatus: HandoffStatus,
+): Patient {
+  return updatePatient(phoneNumber, { handoffStatus });
 }
 
 export function requireOnboarded(phoneNumber: string): Patient {

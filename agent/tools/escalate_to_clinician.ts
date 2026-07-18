@@ -1,31 +1,56 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
+import {
+  markQueuedNotified,
+  upsertEscalation,
+} from "#lib/escalation-queue";
 import { notifyClinicians } from "#lib/notify";
 import {
   createEscalation,
   getPatient,
   markEscalationNotified,
+  updatePatient,
 } from "#lib/store";
 
 /**
- * DEFERRED — human clinician handoff is not live.
- * Scout must consult the sage subagent for red flags / clinical review instead.
- * Kept for a future human escalation path.
+ * Hand the WhatsApp thread to a human clinician (clinician inbox).
+ * Prefer consulting Sage first for clinical framing; call this when a human
+ * must join (red flags, Sage recommends handoff, or patient asks for a person).
  */
 export default defineTool({
   description:
-    "DEFERRED — do not use. Human clinician handoff is not implemented yet. For red flags and clinical review, consult the sage subagent instead.",
+    "Escalate to a human clinician and pause AI coaching on this WhatsApp thread. Creates an inbox case clinicians can chat into. Call after red flags (with emergency-care advice first), when Sage recommends a human, or when the patient asks for a person. Pass conversationId from the profile/message.",
   inputSchema: z.object({
     phoneNumber: z.string(),
+    conversationId: z
+      .string()
+      .describe("Wassist conversation id for the WhatsApp thread"),
     redFlag: z.string(),
     summary: z.string(),
     transcriptSnippet: z.string(),
     urgency: z.enum(["routine", "urgent", "emergency"]).default("urgent"),
   }),
-  async execute({ phoneNumber, redFlag, summary, transcriptSnippet, urgency }) {
+  async execute({
+    phoneNumber,
+    conversationId,
+    redFlag,
+    summary,
+    transcriptSnippet,
+    urgency,
+  }) {
+    const convId = conversationId.trim();
+    if (!convId) {
+      throw new Error("conversationId is required for human handoff");
+    }
+
     const patient = getPatient(phoneNumber);
+    if (patient.conversationId !== convId) {
+      updatePatient(phoneNumber, { conversationId: convId });
+    }
+
     const card = createEscalation({
       phoneNumber,
+      conversationId: convId,
       patientName: patient.name ?? "Unknown",
       week: patient.week,
       dose:
@@ -39,10 +64,26 @@ export default defineTool({
       redFlag,
     });
 
+    upsertEscalation({
+      id: card.id,
+      phoneNumber: card.phoneNumber,
+      conversationId: card.conversationId,
+      patientName: card.patientName,
+      week: card.week,
+      dose: card.dose,
+      risk: card.risk,
+      urgency: card.urgency,
+      summary: card.summary,
+      transcriptSnippet: card.transcriptSnippet,
+      redFlag: card.redFlag,
+      status: "open",
+    });
+
     const notifyResult = await notifyClinicians(card)
       .then((result) => {
         if (result.notified) {
           markEscalationNotified(phoneNumber, card.id);
+          markQueuedNotified(card.id);
         }
         return result;
       })
@@ -54,14 +95,13 @@ export default defineTool({
 
     return {
       escalated: true,
-      deferred: true,
-      note: "Human handoff is deferred — prefer sage subagent for live clinical path.",
+      handoffStatus: "human" as const,
       escalationId: card.id,
       clinicianNotified: notifyResult.notified,
       notifyChannel: notifyResult.channel,
       notifyDetail: notifyResult.detail,
       messageForPatient:
-        "I'm not able to assess this safely on my own — please seek emergency care if you feel unsafe, and I'll take guidance from Sage on next steps.",
+        "I'm connecting you with a human clinician from the care team now — they'll message you here on WhatsApp shortly. If you feel unsafe, seek emergency care immediately.",
     };
   },
 });
