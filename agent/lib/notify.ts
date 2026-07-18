@@ -16,7 +16,7 @@ export async function notifyClinicians(card: EscalationCard): Promise<{
       notified: false,
       channel: "none",
       detail:
-        "CLINICIAN_WEBHOOK_URL not set — escalation stored on patient record only",
+        "CLINICIAN_WEBHOOK_URL not set — escalation stored in Neon inbox + patient record",
     };
   }
 

@@ -59,13 +59,13 @@ export default defineChannel({
   },
   routes: [
     GET("/eve/v1/clinician/escalations", async () => {
-      const escalations = listEscalations().map(snapshot);
+      const escalations = (await listEscalations()).map(snapshot);
       return Response.json({ escalations });
     }),
 
     GET("/eve/v1/clinician/escalations/:id", async (_req, { params }) => {
       const id = String(params.id ?? "");
-      const card = getEscalation(id);
+      const card = await getEscalation(id);
       if (!card) {
         return Response.json({ error: "not_found" }, { status: 404 });
       }
@@ -74,7 +74,7 @@ export default defineChannel({
 
     GET("/eve/v1/clinician/escalations/:id/messages", async (_req, { params }) => {
       const id = String(params.id ?? "");
-      const card = getEscalation(id);
+      const card = await getEscalation(id);
       if (!card) {
         return Response.json({ error: "not_found" }, { status: 404 });
       }
@@ -94,7 +94,7 @@ export default defineChannel({
 
     POST("/eve/v1/clinician/escalations/:id/messages", async (req, { params }) => {
       const id = String(params.id ?? "");
-      const card = getEscalation(id);
+      const card = await getEscalation(id);
       if (!card) {
         return Response.json({ error: "not_found" }, { status: 404 });
       }
@@ -136,13 +136,13 @@ export default defineChannel({
 
     POST("/eve/v1/clinician/escalations/:id/resolve", async (_req, { params }) => {
       const id = String(params.id ?? "");
-      const existing = getEscalation(id);
+      const existing = await getEscalation(id);
       if (!existing) {
         return Response.json({ error: "not_found" }, { status: 404 });
       }
 
-      // Queue is source of truth for handoff during demo (no active Eve turn here).
-      const card = resolveEscalation(id);
+      // Neon queue is source of truth for handoff (no active Eve turn here).
+      const card = await resolveEscalation(id);
       if (!card) {
         return Response.json({ error: "not_found" }, { status: 404 });
       }

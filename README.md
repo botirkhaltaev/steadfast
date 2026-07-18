@@ -25,7 +25,7 @@ Wassist platform webhook (signed)
 Eve root agent — Scout  (agent/)
    instructions.md   — onboarding + coach + when to call Sage / escalate
    defineState       — durable patient (+ condition, sageBriefs, emed, handoff)
-   escalate_to_clinician → global queue (.eve/escalations.json)
+   escalate_to_clinician → Neon escalations (Drizzle)
    handoffStatus: human → Scout pauses coaching
    │
    ├──► Sage (subagent) — briefs / risk / eMed (never WhatsApp)
@@ -73,11 +73,11 @@ Diet and protein target are optional. Coaching, optional meal vision, and risk s
 | Vercel Eve | Durable agent, tools, schedules, `defineState`, subagents |
 | Scout (root) | Patient companion on WhatsApp (no eMed reading tools) |
 | Sage (subagent) | AI clinician — briefs, eMed biomarker tools |
-| Escalation queue | File-backed global inbox (`.eve/escalations.json` or `/tmp` on Vercel) |
+| Neon + Drizzle | Shared state: clinician escalations, session epoch, Gemini Live link registry |
 | Eve `defineState` | Patient DB incl. condition + eMed link/readings + handoff |
 | OpenAI via AI Gateway | Coach + meal vision + voice transcription |
 | Runware FLUX | Optional higher-protein meal visuals |
-| Gemini Live API | Tasso+ voice + vision device helper (browser link) |
+| Gemini Live API | Tasso+ voice + vision device helper (one-time links in Neon) |
 
 ## Setup
 
@@ -87,8 +87,10 @@ Requires **Node 24+**.
 cp .env.example .env
 # AI_GATEWAY_API_KEY, WASSIST_API_KEY, WASSIST_WEBHOOK_SECRET, RUNWARE_API_KEY
 # GEMINI_API_KEY, PUBLIC_BASE_URL, DEVICE_SUPPORT_LINK_SECRET (Tasso+ live helper)
+# DATABASE_URL — Neon via Vercel Marketplace (`vercel integration add neon`)
 
 npm install
+npm run db:push      # apply Neon schema (escalations, app_meta, device_support_links)
 npm run dev          # Next on :3000 — Eve boots alongside via withEve
 ```
 
@@ -135,6 +137,7 @@ Env vars:
 - `GEMINI_API_KEY` (Tasso+ Gemini Live helper)
 - `PUBLIC_BASE_URL` (origin used in WhatsApp device-support links)
 - `DEVICE_SUPPORT_LINK_SECRET` (HMAC for one-time links; falls back to webhook secret)
+- `DATABASE_URL` / `DATABASE_URL_UNPOOLED` (Neon — escalations, session epoch, device-support links)
 - `CLINICIAN_WEBHOOK_URL` (optional Slack/PagerDuty notify on escalate)
 - `NEXT_PUBLIC_EVE_URL` (optional; only if UI is not same-origin)
 
@@ -142,7 +145,7 @@ Health: `GET /eve/v1/wassist/health` · Eve: `GET /eve/v1/health` · Inbox: `GET
 
 ### Demo reset (wipe all sessions)
 
-Patient data lives in Eve durable **sessions** (not a separate Postgres). Restarting the app does **not** clear them. To demo from scratch:
+Patient coaching data lives in Eve durable **sessions**. Shared inbox / epoch / Gemini Live link state lives in **Neon**. Restarting the app does **not** clear either. To demo from scratch (new Eve sessions only):
 
 ```bash
 curl -X POST https://<your-host>/eve/v1/wassist/reset-all

@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { getDb } from "#db/client";
+import { escalations } from "#db/schema";
 import { normalizePhone } from "#lib/phone";
 import type { DropoutRisk } from "#lib/store";
 
@@ -20,109 +21,183 @@ export type QueuedEscalation = {
   updatedAt: string;
 };
 
-type QueueFile = {
-  escalations: QueuedEscalation[];
-};
-
-function queuePath(): string {
-  if (process.env.VERCEL) {
-    return "/tmp/scout-sage-escalations.json";
-  }
-  return join(process.cwd(), ".eve", "escalations.json");
-}
-
-function readQueue(): QueueFile {
-  try {
-    const raw = readFileSync(queuePath(), "utf8");
-    const parsed = JSON.parse(raw) as QueueFile;
-    if (!parsed || !Array.isArray(parsed.escalations)) {
-      return { escalations: [] };
-    }
-    return parsed;
-  } catch {
-    return { escalations: [] };
-  }
-}
-
-function writeQueue(queue: QueueFile): void {
-  const path = queuePath();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(queue, null, 2)}\n`, "utf8");
-}
-
 function now() {
   return new Date().toISOString();
 }
 
-export function upsertEscalation(
+function rowToCard(row: typeof escalations.$inferSelect): QueuedEscalation {
+  return {
+    id: row.id,
+    phoneNumber: row.phoneNumber,
+    conversationId: row.conversationId,
+    patientName: row.patientName,
+    week: row.week,
+    dose: row.dose,
+    risk: row.risk as DropoutRisk,
+    urgency: row.urgency as QueuedEscalation["urgency"],
+    summary: row.summary,
+    transcriptSnippet: row.transcriptSnippet,
+    redFlag: row.redFlag,
+    status: row.status as QueuedEscalation["status"],
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export async function upsertEscalation(
   input: Omit<QueuedEscalation, "createdAt" | "updatedAt" | "status"> & {
     status?: QueuedEscalation["status"];
   },
-): QueuedEscalation {
-  const queue = readQueue();
+): Promise<QueuedEscalation> {
+  const db = getDb();
   const ts = now();
   const phoneNumber = normalizePhone(input.phoneNumber);
-  const existingIdx = queue.escalations.findIndex((e) => e.id === input.id);
+  const status = input.status ?? "open";
 
-  const card: QueuedEscalation = {
-    ...input,
-    phoneNumber,
-    status: input.status ?? "open",
-    createdAt:
-      existingIdx >= 0 ? queue.escalations[existingIdx]!.createdAt : ts,
-    updatedAt: ts,
-  };
+  const existing = await db
+    .select()
+    .from(escalations)
+    .where(eq(escalations.id, input.id))
+    .limit(1);
 
-  if (existingIdx >= 0) {
-    queue.escalations[existingIdx] = card;
-  } else {
-    queue.escalations.unshift(card);
+  const createdAt = existing[0]?.createdAt ?? ts;
+
+  await db
+    .insert(escalations)
+    .values({
+      id: input.id,
+      phoneNumber,
+      conversationId: input.conversationId,
+      patientName: input.patientName,
+      week: input.week,
+      dose: input.dose,
+      risk: input.risk,
+      urgency: input.urgency,
+      summary: input.summary,
+      transcriptSnippet: input.transcriptSnippet,
+      redFlag: input.redFlag,
+      status,
+      createdAt,
+      updatedAt: ts,
+    })
+    .onConflictDoUpdate({
+      target: escalations.id,
+      set: {
+        phoneNumber,
+        conversationId: input.conversationId,
+        patientName: input.patientName,
+        week: input.week,
+        dose: input.dose,
+        risk: input.risk,
+        urgency: input.urgency,
+        summary: input.summary,
+        transcriptSnippet: input.transcriptSnippet,
+        redFlag: input.redFlag,
+        status,
+        updatedAt: ts,
+      },
+    });
+
+  // Cap history for demo store.
+  const overflow = await db
+    .select({ id: escalations.id })
+    .from(escalations)
+    .orderBy(desc(escalations.updatedAt))
+    .offset(200);
+
+  if (overflow.length > 0) {
+    await db.delete(escalations).where(
+      inArray(
+        escalations.id,
+        overflow.map((r) => r.id),
+      ),
+    );
   }
 
-  // Cap history for demo file store.
-  queue.escalations = queue.escalations.slice(0, 200);
-  writeQueue(queue);
-  return card;
+  return {
+    id: input.id,
+    phoneNumber,
+    conversationId: input.conversationId,
+    patientName: input.patientName,
+    week: input.week,
+    dose: input.dose,
+    risk: input.risk,
+    urgency: input.urgency,
+    summary: input.summary,
+    transcriptSnippet: input.transcriptSnippet,
+    redFlag: input.redFlag,
+    status,
+    createdAt,
+    updatedAt: ts,
+  };
 }
 
-export function listEscalations(): QueuedEscalation[] {
-  const { escalations } = readQueue();
-  return [...escalations].sort((a, b) => {
-    const openRank = (s: QueuedEscalation["status"]) =>
-      s === "resolved" ? 1 : 0;
-    const byOpen = openRank(a.status) - openRank(b.status);
-    if (byOpen !== 0) return byOpen;
-    return b.updatedAt.localeCompare(a.updatedAt);
-  });
+export async function listEscalations(): Promise<QueuedEscalation[]> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(escalations)
+    .orderBy(
+      sql`case when ${escalations.status} = 'resolved' then 1 else 0 end`,
+      desc(escalations.updatedAt),
+    );
+
+  return rows.map(rowToCard);
 }
 
-export function getEscalation(id: string): QueuedEscalation | null {
-  return readQueue().escalations.find((e) => e.id === id) ?? null;
+export async function getEscalation(
+  id: string,
+): Promise<QueuedEscalation | null> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(escalations)
+    .where(eq(escalations.id, id))
+    .limit(1);
+  return rows[0] ? rowToCard(rows[0]) : null;
 }
 
-export function openHandoffForPhone(phoneNumber: string): QueuedEscalation | null {
+export async function openHandoffForPhone(
+  phoneNumber: string,
+): Promise<QueuedEscalation | null> {
+  const db = getDb();
   const phone = normalizePhone(phoneNumber);
-  return (
-    listEscalations().find(
-      (e) =>
-        e.phoneNumber === phone &&
-        (e.status === "open" || e.status === "notified"),
-    ) ?? null
-  );
+  const rows = await db
+    .select()
+    .from(escalations)
+    .where(
+      and(
+        eq(escalations.phoneNumber, phone),
+        ne(escalations.status, "resolved"),
+      ),
+    )
+    .orderBy(desc(escalations.updatedAt))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) return null;
+  if (row.status !== "open" && row.status !== "notified") return null;
+  return rowToCard(row);
 }
 
-export function phoneHasHumanHandoff(phoneNumber: string): boolean {
-  return Boolean(openHandoffForPhone(phoneNumber));
+export async function phoneHasHumanHandoff(
+  phoneNumber: string,
+): Promise<boolean> {
+  return Boolean(await openHandoffForPhone(phoneNumber));
 }
 
-export function markQueuedNotified(id: string): QueuedEscalation | null {
-  const card = getEscalation(id);
+export async function markQueuedNotified(
+  id: string,
+): Promise<QueuedEscalation | null> {
+  const card = await getEscalation(id);
   if (!card || card.status === "resolved") return card;
   return upsertEscalation({ ...card, status: "notified" });
 }
 
-export function resolveEscalation(id: string): QueuedEscalation | null {
-  const card = getEscalation(id);
+export async function resolveEscalation(
+  id: string,
+): Promise<QueuedEscalation | null> {
+  const card = await getEscalation(id);
   if (!card) return null;
   return upsertEscalation({ ...card, status: "resolved" });
 }

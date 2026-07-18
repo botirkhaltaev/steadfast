@@ -1,5 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { eq, lt } from "drizzle-orm";
 import { GoogleGenAI, Modality } from "@google/genai";
+import { getDb } from "#db/client";
+import { deviceSupportLinks } from "#db/schema";
 import { normalizePhone } from "#lib/phone";
 import { buildTassoLiveSystemInstruction } from "#lib/tasso-live-prompt";
 import type { DeviceSupportStatus } from "#lib/store";
@@ -24,22 +27,41 @@ export type LinkTokenClaims = {
   exp: number;
 };
 
-type RegistryEntry = {
+export type RegistryEntry = {
   claims: LinkTokenClaims;
   status: DeviceSupportStatus;
   summary: string | null;
   createdAt: number;
 };
 
-/** Best-effort single-use registry (process memory). Survives warm Vercel instances. */
-const registry = new Map<string, RegistryEntry>();
+function nowIso() {
+  return new Date().toISOString();
+}
 
-function cleanupRegistry(now = Date.now()) {
-  for (const [id, entry] of registry) {
-    if (entry.claims.exp * 1000 < now - 60 * 60 * 1000) {
-      registry.delete(id);
-    }
-  }
+async function cleanupExpiredLinks(now = Date.now()) {
+  const cutoff = Math.floor((now - 60 * 60 * 1000) / 1000);
+  const db = getDb();
+  await db
+    .delete(deviceSupportLinks)
+    .where(lt(deviceSupportLinks.exp, cutoff));
+}
+
+function rowToEntry(
+  row: typeof deviceSupportLinks.$inferSelect,
+): RegistryEntry {
+  return {
+    claims: {
+      sid: row.sid,
+      phone: row.phoneNumber,
+      conversationId: row.conversationId,
+      name: row.patientName,
+      reason: row.reason,
+      exp: row.exp,
+    },
+    status: row.status as DeviceSupportStatus,
+    summary: row.summary,
+    createdAt: Date.parse(row.createdAt) || Date.now(),
+  };
 }
 
 function linkSecret(): string {
@@ -90,14 +112,14 @@ function sign(payloadB64: string): string {
   return b64url(createHmac("sha256", linkSecret()).update(payloadB64).digest());
 }
 
-export function mintLinkToken(input: {
+export async function mintLinkToken(input: {
   phoneNumber: string;
   conversationId: string;
   name?: string | null;
   reason?: string | null;
   ttlMs?: number;
-}): { token: string; claims: LinkTokenClaims; url: string } {
-  cleanupRegistry();
+}): Promise<{ token: string; claims: LinkTokenClaims; url: string }> {
+  await cleanupExpiredLinks();
   const phone = normalizePhone(input.phoneNumber);
   if (!phone) throw new Error("phoneNumber is required");
   const conversationId = input.conversationId.trim();
@@ -115,12 +137,20 @@ export function mintLinkToken(input: {
 
   const payloadB64 = b64url(JSON.stringify(claims));
   const token = `${payloadB64}.${sign(payloadB64)}`;
+  const ts = nowIso();
 
-  registry.set(claims.sid, {
-    claims,
+  const db = getDb();
+  await db.insert(deviceSupportLinks).values({
+    sid: claims.sid,
+    phoneNumber: phone,
+    conversationId,
+    patientName: claims.name,
+    reason: claims.reason,
+    exp: claims.exp,
     status: "link_sent",
     summary: null,
-    createdAt: Date.now(),
+    createdAt: ts,
+    updatedAt: ts,
   });
 
   const url = `${publicBaseUrl()}/eve/v1/device-support?t=${encodeURIComponent(token)}`;
@@ -131,8 +161,8 @@ export type VerifyLinkResult =
   | { ok: true; claims: LinkTokenClaims; entry: RegistryEntry }
   | { ok: false; error: string; status: number };
 
-export function verifyLinkToken(raw: string): VerifyLinkResult {
-  cleanupRegistry();
+export async function verifyLinkToken(raw: string): Promise<VerifyLinkResult> {
+  await cleanupExpiredLinks();
   const token = raw.trim();
   if (!token || !token.includes(".")) {
     return { ok: false, error: "invalid_token", status: 400 };
@@ -164,47 +194,109 @@ export function verifyLinkToken(raw: string): VerifyLinkResult {
     return { ok: false, error: "expired", status: 410 };
   }
 
-  let entry = registry.get(claims.sid);
-  if (!entry) {
-    // Cold start / new instance — reconstruct a link_sent entry from the signed claims.
-    entry = {
-      claims,
-      status: "link_sent",
-      summary: null,
-      createdAt: Date.now(),
-    };
-    registry.set(claims.sid, entry);
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(deviceSupportLinks)
+    .where(eq(deviceSupportLinks.sid, claims.sid))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) {
+    // Signed token alone is not enough — Neon is source of truth for mint + status.
+    return { ok: false, error: "unknown_session", status: 404 };
   }
 
-  return { ok: true, claims, entry };
+  return { ok: true, claims, entry: rowToEntry(row) };
 }
 
-export function markLinkStarted(sid: string): VerifyLinkResult {
-  const entry = registry.get(sid);
-  if (!entry) return { ok: false, error: "unknown_session", status: 404 };
-  if (entry.claims.exp * 1000 < Date.now()) {
+export async function markLinkStarted(sid: string): Promise<VerifyLinkResult> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(deviceSupportLinks)
+    .where(eq(deviceSupportLinks.sid, sid))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return { ok: false, error: "unknown_session", status: 404 };
+  if (row.exp * 1000 < Date.now()) {
     return { ok: false, error: "expired", status: 410 };
   }
-  if (entry.status !== "link_sent") {
+  if (row.status !== "link_sent") {
     return { ok: false, error: "already_used", status: 409 };
   }
-  entry.status = "started";
-  return { ok: true, claims: entry.claims, entry };
+
+  const ts = nowIso();
+  await db
+    .update(deviceSupportLinks)
+    .set({ status: "started", updatedAt: ts })
+    .where(eq(deviceSupportLinks.sid, sid));
+
+  return {
+    ok: true,
+    claims: {
+      sid: row.sid,
+      phone: row.phoneNumber,
+      conversationId: row.conversationId,
+      name: row.patientName,
+      reason: row.reason,
+      exp: row.exp,
+    },
+    entry: {
+      claims: {
+        sid: row.sid,
+        phone: row.phoneNumber,
+        conversationId: row.conversationId,
+        name: row.patientName,
+        reason: row.reason,
+        exp: row.exp,
+      },
+      status: "started",
+      summary: row.summary,
+      createdAt: Date.parse(row.createdAt) || Date.now(),
+    },
+  };
 }
 
-export function markLinkOutcome(
+/** Reset a started link back to link_sent (e.g. Gemini mint failure). */
+export async function resetLinkToSent(sid: string): Promise<void> {
+  const db = getDb();
+  const ts = nowIso();
+  await db
+    .update(deviceSupportLinks)
+    .set({ status: "link_sent", updatedAt: ts })
+    .where(eq(deviceSupportLinks.sid, sid));
+}
+
+export async function markLinkOutcome(
   sid: string,
   outcome: DeviceSupportOutcome,
   summary: string | null,
-): VerifyLinkResult {
-  const entry = registry.get(sid);
-  if (!entry) return { ok: false, error: "unknown_session", status: 404 };
-  if (entry.status === "completed" || entry.status === "abandoned" || entry.status === "escalate") {
-    // Idempotent: allow repeat outcome posts with same terminal status.
-    return { ok: true, claims: entry.claims, entry };
+): Promise<VerifyLinkResult> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(deviceSupportLinks)
+    .where(eq(deviceSupportLinks.sid, sid))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return { ok: false, error: "unknown_session", status: 404 };
+
+  if (
+    row.status === "completed" ||
+    row.status === "abandoned" ||
+    row.status === "escalate"
+  ) {
+    return { ok: true, claims: rowToEntry(row).claims, entry: rowToEntry(row) };
   }
-  entry.status = outcome;
-  entry.summary = summary;
+
+  const ts = nowIso();
+  await db
+    .update(deviceSupportLinks)
+    .set({ status: outcome, summary, updatedAt: ts })
+    .where(eq(deviceSupportLinks.sid, sid));
+
+  const entry = rowToEntry({ ...row, status: outcome, summary, updatedAt: ts });
   return { ok: true, claims: entry.claims, entry };
 }
 

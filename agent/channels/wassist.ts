@@ -161,7 +161,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
     }
     return send(input.message, {
       auth: input.auth,
-      continuationToken: patientContinuationToken(phoneNumber),
+      continuationToken: await patientContinuationToken(phoneNumber),
       state: initialState(phoneNumber, conversationId),
       title: `WhatsApp ${phoneNumber}`,
     });
@@ -244,7 +244,9 @@ export default defineChannel<ChannelState, Ctx, Target>({
                   messageId: inbound.messageId,
                 },
               },
-              continuationToken: patientContinuationToken(inbound.phoneNumber),
+              continuationToken: await patientContinuationToken(
+                inbound.phoneNumber,
+              ),
               state: initialState(
                 inbound.phoneNumber,
                 inbound.conversationId,
@@ -265,7 +267,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
         service: "scout-sage-wassist",
         webhook: "/eve/v1/wassist/webhook",
         resetAll: "/eve/v1/wassist/reset-all",
-        sessionEpoch: getSessionEpoch(),
+        sessionEpoch: await getSessionEpoch(),
         authConfigured: Boolean(process.env.WASSIST_WEBHOOK_SECRET),
         modelConfigured: hasModelCredentials(),
       }),
@@ -277,8 +279,8 @@ export default defineChannel<ChannelState, Ctx, Target>({
      * Open on purpose for hackathon demos — no auth.
      */
     POST("/eve/v1/wassist/reset-all", async () => {
-      const previousEpoch = getSessionEpoch();
-      const sessionEpoch = bumpSessionEpoch();
+      const previousEpoch = await getSessionEpoch();
+      const sessionEpoch = await bumpSessionEpoch();
 
       console.info("[wassist] reset-all", { previousEpoch, sessionEpoch });
       return Response.json({
@@ -349,7 +351,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
                   conversationId,
                 },
               },
-              continuationToken: patientContinuationToken(phoneNumber),
+              continuationToken: await patientContinuationToken(phoneNumber),
               state: initialState(phoneNumber, conversationId),
               title: `WhatsApp ${phoneNumber}`,
             },

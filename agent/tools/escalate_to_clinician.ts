@@ -64,7 +64,7 @@ export default defineTool({
       redFlag,
     });
 
-    upsertEscalation({
+    await upsertEscalation({
       id: card.id,
       phoneNumber: card.phoneNumber,
       conversationId: card.conversationId,
@@ -80,10 +80,10 @@ export default defineTool({
     });
 
     const notifyResult = await notifyClinicians(card)
-      .then((result) => {
+      .then(async (result) => {
         if (result.notified) {
           markEscalationNotified(phoneNumber, card.id);
-          markQueuedNotified(card.id);
+          await markQueuedNotified(card.id);
         }
         return result;
       })

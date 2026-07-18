@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { eq } from "drizzle-orm";
+import { getDb } from "#db/client";
+import { appMeta } from "#db/schema";
 import { normalizePhone } from "#lib/phone";
 
 /**
@@ -8,13 +9,7 @@ import { normalizePhone } from "#lib/phone";
  * (blank patient / eMed / briefs). Old sessions become unreachable.
  */
 
-function epochFilePath(): string {
-  // Vercel/serverless FS is mostly read-only; /tmp works for this instance.
-  if (process.env.VERCEL) {
-    return "/tmp/scout-sage-session-epoch";
-  }
-  return join(process.cwd(), ".eve", "session-epoch");
-}
+const EPOCH_KEY = "session_epoch";
 
 function envEpochFloor(): number {
   const raw = process.env.DEMO_SESSION_EPOCH?.trim();
@@ -23,36 +18,48 @@ function envEpochFloor(): number {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-function readStoredEpoch(): number {
-  try {
-    const raw = readFileSync(epochFilePath(), "utf8").trim();
-    const n = Number.parseInt(raw, 10);
-    return Number.isFinite(n) && n >= 0 ? n : 0;
-  } catch {
-    return 0;
-  }
+async function readStoredEpoch(): Promise<number> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(appMeta)
+    .where(eq(appMeta.key, EPOCH_KEY))
+    .limit(1);
+  const raw = rows[0]?.value?.trim();
+  if (!raw) return 0;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-function writeStoredEpoch(epoch: number): void {
-  const path = epochFilePath();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${epoch}\n`, "utf8");
+async function writeStoredEpoch(epoch: number): Promise<void> {
+  const db = getDb();
+  const ts = new Date().toISOString();
+  await db
+    .insert(appMeta)
+    .values({ key: EPOCH_KEY, value: String(epoch), updatedAt: ts })
+    .onConflictDoUpdate({
+      target: appMeta.key,
+      set: { value: String(epoch), updatedAt: ts },
+    });
 }
 
-/** Current session generation (max of file + env floor). */
-export function getSessionEpoch(): number {
-  return Math.max(readStoredEpoch(), envEpochFloor());
+/** Current session generation (max of Neon + env floor). */
+export async function getSessionEpoch(): Promise<number> {
+  return Math.max(await readStoredEpoch(), envEpochFloor());
 }
 
 /** Bump epoch and persist. Returns the new value. */
-export function bumpSessionEpoch(): number {
-  const next = getSessionEpoch() + 1;
-  writeStoredEpoch(next);
+export async function bumpSessionEpoch(): Promise<number> {
+  const next = (await getSessionEpoch()) + 1;
+  await writeStoredEpoch(next);
   return next;
 }
 
 /** Eve continuation token for a patient phone at the current epoch. */
-export function patientContinuationToken(phoneNumber: string): string {
+export async function patientContinuationToken(
+  phoneNumber: string,
+): Promise<string> {
   const phone = normalizePhone(phoneNumber);
-  return `scout-sage:e${getSessionEpoch()}:${phone}`;
+  const epoch = await getSessionEpoch();
+  return `scout-sage:e${epoch}:${phone}`;
 }
