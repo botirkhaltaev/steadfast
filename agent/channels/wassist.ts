@@ -138,6 +138,24 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
       const replyCallback = body.reply_callback ?? null;
       const conversationId = body.conversation_id ?? null;
 
+      // Fail fast when the model cannot run — avoid 50s hangs on misconfigured deploys.
+      const hasModelCreds = Boolean(
+        process.env.AI_GATEWAY_API_KEY ||
+          process.env.OPENAI_API_KEY ||
+          process.env.VERCEL, // hosted Vercel can use AI Gateway OIDC
+      );
+      if (!hasModelCreds && replyCallback) {
+        waitUntil(
+          sendViaCallback(replyCallback, {
+            content:
+              "Steadfast isn't fully configured yet (missing model credentials). Please try again shortly.",
+          }).catch((err) => {
+            console.error("[wassist] config error callback failed", err);
+          }),
+        );
+        return Response.json({ content: "No CUSTOMER message reply" });
+      }
+
       const preface = [
         `[patient_phone=${phoneNumber}]`,
         conversationId ? `[conversation_id=${conversationId}]` : null,
