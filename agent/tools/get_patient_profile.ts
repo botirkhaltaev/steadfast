@@ -9,7 +9,7 @@ import {
 
 export default defineTool({
   description:
-    "Load the patient's profile and onboarding status. Call at the start of every turn before coaching or onboarding.",
+    "Load the patient's coaching profile and onboarding status. Call at the start of every turn. Includes emedDeviceLinked so you know when to consult Sage for biomarker review — Scout has no eMed reading tools.",
   inputSchema: z.object({
     phoneNumber: z.string().describe("WhatsApp phone in E.164 form"),
     conversationId: z
@@ -43,9 +43,12 @@ export default defineTool({
       dropoutRisk: p.dropoutRisk,
       conversationId: p.conversationId ?? null,
       recentCheckins: p.checkins.slice(-3),
-      recentSageBriefs: (p.sageBriefs ?? []).slice(-3),
+      recentSageBriefs: p.sageBriefs.slice(-3),
+      emedDeviceLinked: Boolean(p.emedDevice),
+      emedDeviceId: p.emedDevice?.deviceId ?? null,
       openEscalations: p.escalations.filter((e) => e.status === "open").length,
     };
   },
 });
+
 

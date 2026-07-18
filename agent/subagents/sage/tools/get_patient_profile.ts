@@ -8,7 +8,7 @@ import {
 
 export default defineTool({
   description:
-    "Load the patient's profile, recent check-ins, dropout risk, and prior Sage briefs. Call before writing a clinical brief.",
+    "Load the clinical patient profile: check-ins, dropout risk, prior Sage briefs, and whether an eMed monitor is linked. Call before writing a brief. Use get_emed_device / get_emed_biomarkers for readings.",
   inputSchema: z.object({
     phoneNumber: z.string().describe("WhatsApp phone in E.164 form"),
   }),
@@ -32,8 +32,11 @@ export default defineTool({
       sideEffectHistory: p.sideEffectHistory,
       dropoutRisk: p.dropoutRisk,
       recentCheckins: p.checkins.slice(-5),
-      recentSageBriefs: (p.sageBriefs ?? []).slice(-3),
+      recentSageBriefs: p.sageBriefs.slice(-3),
+      emedDeviceLinked: Boolean(p.emedDevice),
+      emedDeviceId: p.emedDevice?.deviceId ?? null,
       openEscalations: p.escalations.filter((e) => e.status === "open").length,
     };
   },
 });
+

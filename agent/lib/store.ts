@@ -1,4 +1,12 @@
 import { defineState } from "eve/context";
+import {
+  buildEmedDemoSeed,
+  emedReadingsLastDays,
+  isEmedDemoPhone,
+  latestEmedReading,
+  type EmedDeviceLink,
+  type EmedReading,
+} from "#lib/emed";
 import { normalizePhone } from "#lib/phone";
 
 export type DropoutRisk = "low" | "medium" | "high";
@@ -49,6 +57,7 @@ export type SageBrief = {
     | "side_effect"
     | "adherence"
     | "checkin_review"
+    | "biomarker_review"
     | "other";
   urgency: "routine" | "urgent" | "emergency";
   riskRead: DropoutRisk;
@@ -77,6 +86,10 @@ export type Patient = {
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
   sageBriefs: SageBrief[];
+  /** Linked eMed home monitor, if any. */
+  emedDevice: EmedDeviceLink | null;
+  /** Durable biomarker readings from the linked eMed device. */
+  emedReadings: EmedReading[];
   conversationId?: string;
   /** ISO timestamp of last agent-initiated check-in. */
   lastProactiveCheckInAt?: string;
@@ -85,6 +98,8 @@ export type Patient = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type { EmedDeviceLink, EmedReading };
 
 function now() {
   return new Date().toISOString();
@@ -108,6 +123,8 @@ function blankPatient(phoneNumber = ""): Patient {
     dropoutRisk: "low",
     escalations: [],
     sageBriefs: [],
+    emedDevice: null,
+    emedReadings: [],
     createdAt: ts,
     updatedAt: ts,
   };
@@ -119,6 +136,20 @@ function blankPatient(phoneNumber = ""): Patient {
  */
 export const patientState = defineState("scout_sage.patient", () => blankPatient());
 
+function seedEmedDemoIfNeeded(phone: string): void {
+  if (!isEmedDemoPhone(phone)) return;
+  const current = patientState.get();
+  if (current.emedDevice) return;
+
+  const seed = buildEmedDemoSeed(now());
+  patientState.update((p) => ({
+    ...p,
+    emedDevice: seed.device,
+    emedReadings: seed.readings,
+    updatedAt: now(),
+  }));
+}
+
 export function getPatient(phoneNumber: string): Patient {
   const phone = normalizePhone(phoneNumber);
   if (!phone) {
@@ -129,6 +160,7 @@ export function getPatient(phoneNumber: string): Patient {
 
   if (!current.phoneNumber) {
     patientState.update(() => blankPatient(phone));
+    seedEmedDemoIfNeeded(phone);
     return patientState.get();
   }
 
@@ -145,14 +177,8 @@ export function getPatient(phoneNumber: string): Patient {
     patientState.update((p) => ({ ...p, phoneNumber: phone, updatedAt: now() }));
   }
 
-  // Backfill sageBriefs for any older in-memory shapes.
-  const patient = patientState.get();
-  if (!patient.sageBriefs) {
-    patientState.update((p) => ({ ...p, sageBriefs: [], updatedAt: now() }));
-    return patientState.get();
-  }
-
-  return patient;
+  seedEmedDemoIfNeeded(phone);
+  return patientState.get();
 }
 
 export function updatePatient(phoneNumber: string, patch: Partial<Patient>): Patient {
@@ -190,10 +216,27 @@ export function saveSageBrief(
   getPatient(brief.phoneNumber);
   patientState.update((p) => ({
     ...p,
-    sageBriefs: [...(p.sageBriefs ?? []), brief].slice(-20),
+    sageBriefs: [...p.sageBriefs, brief].slice(-20),
     updatedAt: ts,
   }));
   return brief;
+}
+
+export function getEmedDevice(phoneNumber: string): EmedDeviceLink | null {
+  return getPatient(phoneNumber).emedDevice;
+}
+
+export function listEmedReadings(
+  phoneNumber: string,
+  days = 7,
+): { device: EmedDeviceLink | null; latest: EmedReading | null; trend: EmedReading[] } {
+  const patient = getPatient(phoneNumber);
+  const trend = emedReadingsLastDays(patient.emedReadings, days);
+  return {
+    device: patient.emedDevice,
+    latest: latestEmedReading(patient.emedReadings),
+    trend,
+  };
 }
 
 export function createEscalation(
@@ -240,12 +283,19 @@ export function computeRiskScore(patient: Patient): DropoutRisk {
   const latest = patient.checkins[patient.checkins.length - 1];
   const notes = (latest?.notes ?? "").toLowerCase();
   const severity = latest?.sideEffectSeverity ?? 0;
-  const score =
+  let score =
     (latest?.missedDoses && latest.missedDoses > 0 ? 2 : 0) +
     (severity >= 7 ? 2 : severity >= 4 ? 1 : 0) +
     (notes.includes("stop") ? 2 : 0) +
     (notes.includes("cost") ? 1 : 0) +
     (patient.week != null && patient.week >= 12 && patient.week <= 24 ? 1 : 0);
+
+  // Stored eMed readings (when linked) can nudge risk — clinical review still belongs to Sage.
+  const emedLatest = latestEmedReading(patient.emedReadings);
+  if (emedLatest) {
+    if (emedLatest.glucoseMmolL >= 7.0) score += 1;
+    if (emedLatest.restingHrBpm >= 85) score += 1;
+  }
 
   if (score >= 4) return "high";
   if (score >= 2) return "medium";

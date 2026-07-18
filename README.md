@@ -26,19 +26,20 @@ Wassist platform webhook (signed)
    ▼
 Eve root agent — Scout
    instructions.md   — onboarding + coach + when to call Sage
-   defineState       — durable per-phone patient profile (+ sageBriefs)
-   tools/            — onboarding, choices, check-in, vision
+   defineState       — durable patient profile (+ sageBriefs, emedDevice, emedReadings)
+   tools/            — onboarding, choices, check-in, vision, WhatsApp (no eMed tools)
    schedules/        — daily sweep; check-ins honor chosen cadence
    │
-   ├──► Sage (subagent) — briefs, risk review, coaching guidance
-   │         tools: get_patient_profile, save_clinical_brief
+   ├──► Sage (subagent) — clinical briefs, risk, eMed biomarker review
+   │         tools: get_patient_profile, get_emed_device, get_emed_biomarkers,
+   │                save_clinical_brief
    │         never messages the patient
    │
    ▼ POST /conversations/{id}/messages/
 Wassist Conversations API → WhatsApp
 ```
 
-One inbound path (signed platform events). One outbound path (REST). Scout is the only voice on WhatsApp.
+One inbound path (signed platform events). One outbound path (REST). Scout is the only voice on WhatsApp. Tools are role-split: Scout coaches on WhatsApp; Sage owns clinical eMed reads.
 
 ## Onboarding (in WhatsApp)
 
@@ -58,8 +59,9 @@ Coaching, meal vision, and risk scoring unlock only after onboarding completes.
 | --- | --- |
 | Wassist webhooks + Conversations API | WhatsApp pipe, media, quick replies |
 | Vercel Eve | Durable agent, tools, schedules, `defineState`, subagents |
-| Scout (root) | Patient companion on WhatsApp |
-| Sage (subagent) | AI clinician — briefs & guidance for Scout |
+| Scout (root) | Patient companion on WhatsApp (no eMed reading tools) |
+| Sage (subagent) | AI clinician — briefs, eMed device/biomarker tools |
+| Eve `defineState` | Patient DB incl. eMed device link + readings |
 | OpenAI via AI Gateway | Coach + meal vision |
 | Runware FLUX | Higher-protein meal visuals |
 
@@ -70,10 +72,15 @@ Requires **Node 24+**.
 ```bash
 cp .env.example .env
 # AI_GATEWAY_API_KEY, WASSIST_API_KEY, WASSIST_WEBHOOK_SECRET, RUNWARE_API_KEY
+# Optional: EMED_DEMO_PHONE=+44...  (one-time seed of eMed readings for that WhatsApp user)
 
 npm install
 npm run dev
 ```
+
+### Demo eMed device
+
+Set `EMED_DEMO_PHONE` to your tester’s E.164 WhatsApp number. On first session load, Eve durable state gets a linked eMed monitor + ~7 days of readings. **Sage** reads them via `get_emed_device` / `get_emed_biomarkers`. Scout only sees `emedDeviceLinked` on the profile and consults Sage for biomarker context.
 
 ### Wire Wassist
 
@@ -96,6 +103,7 @@ Env vars:
 - `WASSIST_API_KEY`
 - `WASSIST_WEBHOOK_SECRET` (required in production — HMAC `x-wassist-signature`)
 - `RUNWARE_API_KEY`
+- `EMED_DEMO_PHONE` (optional; E.164 phone that receives a one-time eMed seed into durable state)
 - `CLINICIAN_WEBHOOK_URL` (optional; **future** human escalation sink — unused by Scout/Sage today)
 
 Health: `GET /health` → `{"ok":true,"service":"scout-sage-wassist","webhook":"/webhook"}`  
@@ -106,8 +114,9 @@ Eve: `GET /eve/v1/health`
 1. New chat → onboarding with quick replies (incl. check-in frequency) → confirm profile  
 2. Agent-initiated check-in on their cadence (or `POST /proactive-checkin`)  
 3. “Rough week, nauseous, skipped a dose” → Scout coaches; may consult Sage on risk  
-4. Lunch photo → protein estimate + Runware upgrade image  
-5. “Bad stomach pain” → Scout stops coaching → consults Sage → patient-safe next steps (no human handoff yet)  
+4. With `EMED_DEMO_PHONE` set → Scout sees device linked → consults Sage → Sage pulls eMed biomarkers  
+5. Lunch photo → protein estimate + Runware upgrade image  
+6. “Bad stomach pain” → Scout stops coaching → consults Sage → patient-safe next steps (no human handoff yet)  
 
 ## Safety
 

@@ -13,6 +13,7 @@ export default defineTool({
       "side_effect",
       "adherence",
       "checkin_review",
+      "biomarker_review",
       "other",
     ]),
     urgency: z.enum(["routine", "urgent", "emergency"]).default("routine"),
