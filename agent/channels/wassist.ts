@@ -37,21 +37,6 @@ type ChannelState = {
 type Target = { phoneNumber: string };
 type Ctx = { state: ChannelState };
 
-/** Same-isolate claim so dual webhook posts do not both call send(). */
-const INGRESS_CLAIM_TTL_MS = 10 * 60 * 1000;
-const ingressClaims = new Map<string, number>();
-
-function claimInboundMessageId(messageId: string): boolean {
-  const now = Date.now();
-  const expired = [...ingressClaims.entries()]
-    .filter(([, expiresAt]) => expiresAt <= now)
-    .map(([id]) => id);
-  for (const id of expired) ingressClaims.delete(id);
-  if (ingressClaims.has(messageId)) return false;
-  ingressClaims.set(messageId, now + INGRESS_CLAIM_TTL_MS);
-  return true;
-}
-
 function initialState(
   phoneNumber: string | null = null,
   conversationId: string | null = null,
@@ -199,15 +184,6 @@ export default defineChannel<ChannelState, Ctx, Target>({
 
       const inbound = parsed.message;
 
-      // Claim before starting an Eve turn — second fan-out acks and stops.
-      if (!claimInboundMessageId(inbound.messageId)) {
-        console.info("[wassist] ingress duplicate skipped", {
-          phoneNumber: inbound.phoneNumber,
-          messageId: inbound.messageId,
-        });
-        return Response.json({ ok: true, duplicate: true });
-      }
-
       if (!hasModelCredentials()) {
         waitUntil(
           sendMessage(inbound.conversationId, {
@@ -278,8 +254,6 @@ export default defineChannel<ChannelState, Ctx, Target>({
 
       const previousEpoch = getSessionEpoch();
       const sessionEpoch = bumpSessionEpoch();
-      // Drop in-memory ingress dedupe so a fresh demo isn't blocked.
-      ingressClaims.clear();
 
       console.info("[wassist] reset-all", { previousEpoch, sessionEpoch });
       return Response.json({
