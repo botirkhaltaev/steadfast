@@ -21,7 +21,7 @@ import {
 
 export default defineTool({
   description:
-    "Save onboarding answers from WhatsApp (name, condition, medication, dose, week, check-in frequency, eMed setup; optional diet, protein, motivation, side effects). Call after each answer. Accepts quick-reply ids including cond_* and emed_*. Marks onboarding complete when all required fields are present.",
+    "Save onboarding answers from WhatsApp (name, condition, medication, dose, week, check-in frequency, eMed setup; optional diet, protein, motivation, side effects). Call after each tap. Accepts quick-reply ids (cond_*, med_*, dose_*, checkin_*, emed_*). med_other / dose_other do not save — ask the patient to type, then call again. Marks complete when required fields are present.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     conversationId: z.string().optional(),
@@ -30,18 +30,20 @@ export default defineTool({
       .string()
       .optional()
       .describe(
-        "Programme/condition: weight management, diabetes, heart health, or free text; ids cond_weight / cond_diabetes / cond_heart / cond_other",
+        "Programme/condition or ids: cond_weight / cond_diabetes / cond_heart",
       ),
     medication: z
       .string()
       .optional()
       .describe(
-        "Medication name as typed by the patient",
+        "Medication label or ids: med_semaglutide / med_tirzepatide / med_metformin / med_insulin / med_statin / med_bp (not med_other)",
       ),
     dose: z
       .string()
       .optional()
-      .describe("e.g. 5mg, 10 units, once daily"),
+      .describe(
+        "Dose label or ids: dose_0_25 / dose_500 / dose_10u / dose_low etc. (not dose_other)",
+      ),
     week: z
       .union([z.number().int().min(0).max(104), z.string().min(1)])
       .optional()
@@ -91,11 +93,25 @@ export default defineTool({
     const condition = normalizeCondition(input.condition);
     if (condition !== undefined) patch.condition = condition;
 
-    const medication = normalizeMedication(input.medication);
-    if (medication !== undefined) patch.medication = medication;
+    if (input.medication !== undefined) {
+      const medication = normalizeMedication(input.medication);
+      if (medication === undefined) {
+        throw new Error(
+          "med_other / Other needs a typed medication name — ask the patient, then call again with the name",
+        );
+      }
+      patch.medication = medication;
+    }
 
-    const dose = normalizeDose(input.dose);
-    if (dose !== undefined) patch.dose = dose;
+    if (input.dose !== undefined) {
+      const dose = normalizeDose(input.dose);
+      if (dose === undefined) {
+        throw new Error(
+          "dose_other / Other needs a typed dose — ask the patient, then call again with the dose",
+        );
+      }
+      patch.dose = dose;
+    }
 
     const week = normalizeWeek(input.week);
     if (week !== undefined) {

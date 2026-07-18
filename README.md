@@ -46,12 +46,13 @@ One inbound path (signed platform events). One outbound path (REST). Scout is th
 New numbers start with an empty durable profile (`emedSetupStatus: pending`).
 
 1. Welcome + disclose you're not a doctor (Scout; Sage partners; eMed can connect)  
-2. One question at a time: name (typed) → **condition / programme** → medication → dose → week → **check-in frequency** → **eMed setup**  
-3. Almost everything uses WhatsApp **quick-reply buttons** (`offer_choices`, max 3) — name and medication/dose are often typed  
-4. Condition buttons: Weight mgmt / Diabetes / Heart health (or free text for other)  
-5. **eMed step (required):** Connect eMed / I don't have one / Not now (`emed_connect`, `emed_no_device`, `emed_skip`)  
-6. Connect writes that user’s health data + readings into durable state (stand-in until live eMed API)  
-7. One confirmation summary: cadence + eMed outcome (linked / no device / skipped)  
+2. One question at a time: name (typed) → condition → medication → dose → week → check-in frequency → eMed setup  
+3. **Tap-first:** almost everything is WhatsApp quick-reply buttons (`offer_choices`, max 3). Name is the only required typing step; **Other** is the escape hatch for custom med/dose  
+4. Condition-aware med buttons (e.g. Weight → Semaglutide / Tirzepatide / Other; Diabetes → Metformin / Insulin / Other)  
+5. Dose buttons follow the chosen medication  
+6. **eMed step (required):** Connect eMed / I don't have one / Not now  
+7. Connect writes that user’s health data + readings into durable state  
+8. One confirmation summary: cadence + eMed outcome (linked / no device / skipped)  
 
 Diet and protein target are optional. Coaching, optional meal vision, and risk scoring unlock only after onboarding completes.
 
@@ -81,12 +82,13 @@ npm run dev
 
 ### eMed health data (onboarding)
 
-Patients explicitly choose during onboarding. **Connect** links per-user eMed health data and stores readings in Eve state (sync stand-in). Skip / no device leaves them unlinked. **Sage** reads linked data via `get_emed_device` / `get_emed_biomarkers`. Scout connects via `update_onboarding` only — no clinical read tools.
+Patients explicitly choose during onboarding. **Connect** links per-user eMed health data and stores readings in Eve state. Skip / no device leaves them unlinked. **Sage** reads linked data via `get_emed_device` / `get_emed_biomarkers`. Scout connects via `update_onboarding` only — no clinical read tools.
 
 ### Wire Wassist
 
 1. Create a webhook at [wassist.app/developers/webhooks](https://wassist.app/developers/webhooks)  
-2. URL: your deploy host + `/webhook` (e.g. `https://steadfast-olive.vercel.app/webhook` until the project is renamed)  
+2. URL: your deploy host + `/webhook`  
+
 3. Subscribe to `message.received`  
 4. Copy the signing secret into `WASSIST_WEBHOOK_SECRET`  
 5. Point your number’s routing at this integration (**one** webhook — do not also attach a second BYOA/agent webhook to the same URL)  

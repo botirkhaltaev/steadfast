@@ -82,19 +82,83 @@ export function normalizeCheckInFrequency(
   return FREQUENCY_ALIASES[key];
 }
 
+const MEDICATION_ALIASES: Record<string, string> = {
+  med_semaglutide: "semaglutide",
+  semaglutide: "semaglutide",
+  med_tirzepatide: "tirzepatide",
+  tirzepatide: "tirzepatide",
+  med_metformin: "metformin",
+  metformin: "metformin",
+  med_insulin: "insulin",
+  insulin: "insulin",
+  med_statin: "statin",
+  statin: "statin",
+  med_bp: "blood pressure medicine",
+  "bp medicine": "blood pressure medicine",
+  "blood pressure medicine": "blood pressure medicine",
+  "blood pressure med": "blood pressure medicine",
+};
+
+/**
+ * Maps medication quick-reply ids. `med_other` returns undefined so Scout asks for a typed name.
+ */
 export function normalizeMedication(
   raw: string | undefined,
 ): string | undefined {
   if (raw == null) return undefined;
-  const trimmed = raw.trim();
-  if (!trimmed) return undefined;
-  return trimmed;
+  const key = raw.trim().toLowerCase();
+  if (!key) return undefined;
+  if (key === "med_other" || key === "other") return undefined;
+  return MEDICATION_ALIASES[key] ?? raw.trim();
 }
 
+const DOSE_ALIASES: Record<string, string> = {
+  dose_0_25: "0.25mg",
+  "0.25mg": "0.25mg",
+  dose_0_5: "0.5mg",
+  "0.5mg": "0.5mg",
+  dose_1: "1mg",
+  "1mg": "1mg",
+  dose_2_5: "2.5mg",
+  "2.5mg": "2.5mg",
+  dose_5: "5mg",
+  "5mg": "5mg",
+  dose_7_5: "7.5mg",
+  "7.5mg": "7.5mg",
+  dose_500: "500mg",
+  "500mg": "500mg",
+  dose_850: "850mg",
+  "850mg": "850mg",
+  dose_1000: "1000mg",
+  "1000mg": "1000mg",
+  dose_10u: "10 units",
+  "10 units": "10 units",
+  dose_20u: "20 units",
+  "20 units": "20 units",
+  dose_10: "10mg",
+  "10mg": "10mg",
+  dose_20: "20mg",
+  "20mg": "20mg",
+  dose_40: "40mg",
+  "40mg": "40mg",
+  dose_low: "low",
+  low: "low",
+  dose_medium: "medium",
+  medium: "medium",
+};
+
+/**
+ * Maps dose quick-reply ids. `dose_other` returns undefined so Scout asks for a typed dose.
+ */
 export function normalizeDose(raw: string | undefined): string | undefined {
   if (raw == null) return undefined;
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
+  const key = trimmed.toLowerCase().replace(/\s+/g, " ");
+  if (key === "dose_other" || key === "other") return undefined;
+  const compact = key.replace(/\s+/g, "");
+  if (DOSE_ALIASES[key]) return DOSE_ALIASES[key];
+  if (DOSE_ALIASES[compact]) return DOSE_ALIASES[compact];
 
   const mgMatch = trimmed.match(/^(\d+(?:\.\d+)?)\s*mg$/i);
   if (mgMatch) return `${mgMatch[1]}mg`;
@@ -156,8 +220,14 @@ export function normalizeSideEffectNote(
   if (!key) return undefined;
   if (key === "side_skip" || key === "skip") return { skip: true };
   if (key === "side_none" || key === "none") return { note: "none" };
-  if (key === "side_nausea" || key === "mild nausea" || key === "nausea") {
-    return { note: "mild nausea" };
+  if (
+    key === "side_mild" ||
+    key === "side_nausea" ||
+    key === "mild side effects" ||
+    key === "mild nausea" ||
+    key === "nausea"
+  ) {
+    return { note: "mild side effects" };
   }
   return { note: raw.trim() };
 }
