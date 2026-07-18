@@ -45,10 +45,8 @@ export type Patient = {
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
   conversationId?: string;
-  /** Recent Wassist delivery/message ids — suppress double-processed turns. */
-  recentInboundIds?: string[];
-  /** Recent outbound content fingerprints — suppress duplicate WhatsApp sends. */
-  recentOutboundFingerprints?: string[];
+  /** WhatsApp message ids already coached on (newest last). */
+  seenMessageIds?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -200,48 +198,28 @@ export function missingOnboardingFields(patient: Patient): string[] {
   return missing;
 }
 
-/** Claim an inbound delivery/message id. False = already processed. */
-export function claimPatientInbound(
+/**
+ * Record that this WhatsApp message is being handled.
+ * Returns false if it was already seen (duplicate webhook / fan-out).
+ */
+export function rememberInboundMessage(
   phoneNumber: string,
-  inboundId: string,
+  messageId: string,
 ): boolean {
   getPatient(phoneNumber);
-  let claimed = false;
+  let firstSeen = false;
   patientState.update((p) => {
-    const recent = p.recentInboundIds ?? [];
-    if (recent.includes(inboundId)) {
-      claimed = false;
+    const seen = p.seenMessageIds ?? [];
+    if (seen.includes(messageId)) {
+      firstSeen = false;
       return p;
     }
-    claimed = true;
+    firstSeen = true;
     return {
       ...p,
-      recentInboundIds: [...recent, inboundId].slice(-40),
+      seenMessageIds: [...seen, messageId].slice(-50),
       updatedAt: now(),
     };
   });
-  return claimed;
-}
-
-/** Claim an outbound fingerprint. False = identical text just sent. */
-export function claimPatientOutbound(
-  phoneNumber: string,
-  fingerprint: string,
-): boolean {
-  getPatient(phoneNumber);
-  let claimed = false;
-  patientState.update((p) => {
-    const recent = p.recentOutboundFingerprints ?? [];
-    if (recent.includes(fingerprint)) {
-      claimed = false;
-      return p;
-    }
-    claimed = true;
-    return {
-      ...p,
-      recentOutboundFingerprints: [...recent, fingerprint].slice(-40),
-      updatedAt: now(),
-    };
-  });
-  return claimed;
+  return firstSeen;
 }

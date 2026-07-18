@@ -4,7 +4,7 @@ WhatsApp-native AI companion that keeps people on their GLP-1 programme.
 
 **UI = WhatsApp only.** Conversational onboarding, weekly check-ins, side-effect coaching, meal-photo protein support, quick-reply choices, dropout-risk awareness, and human escalation on red flags.
 
-Built with [Wassist](https://wassist.app) BYOA + [Vercel Eve](https://eve.dev).
+Built with [Wassist](https://wassist.app) webhooks + [Vercel Eve](https://eve.dev).
 
 ## Why
 
@@ -15,24 +15,29 @@ Built with [Wassist](https://wassist.app) BYOA + [Vercel Eve](https://eve.dev).
 ## Architecture
 
 ```
-WhatsApp  ⇄  Wassist (BYOA or platform webhook)
-                │ POST /webhook
-                │ BYOA: { message, image?, phone_number, reply_callback }
-                │ Event: { event: message.received, contact, message.body, conversationId }
-                ▼
-         Eve agent (Vercel)
-           instructions.md     — onboarding + coach + safety
-           defineState         — durable per-phone patient profile
-           tools/              — onboarding, choices, check-in, vision, Runware, escalate
-           schedules/          — weekly check-in cron
-                │
-                ▼ reply_callback (text / quick replies / image)
-         WhatsApp
+WhatsApp
+   │
+   ▼
+Wassist platform webhook (signed)
+   │ POST /webhook
+   │ event: message.received
+   │ contact.phoneNumber, message.body, conversationId
+   ▼
+Eve agent (Vercel)
+   instructions.md   — onboarding + coach + safety
+   defineState       — durable per-phone patient profile
+   tools/            — onboarding, choices, check-in, vision, escalate
+   schedules/        — weekly check-in cron
+   │
+   ▼ POST /conversations/{id}/messages/
+Wassist Conversations API → WhatsApp
 ```
+
+One inbound path (signed platform events). One outbound path (REST). No BYOA callback dual-stack.
 
 ## Onboarding (in WhatsApp)
 
-New numbers start with an empty durable profile (no seeded personas).
+New numbers start with an empty durable profile.
 
 1. Welcome + disclose you're not a doctor  
 2. One question at a time: name → medication → dose → week → diet → protein target  
@@ -46,7 +51,7 @@ Coaching, meal vision, and risk scoring unlock only after onboarding completes.
 
 | Piece | Role |
 | --- | --- |
-| Wassist BYOA | WhatsApp pipe, media, 24h window, quick replies |
+| Wassist webhooks + Conversations API | WhatsApp pipe, media, quick replies |
 | Vercel Eve | Durable agent, tools, schedules, `defineState` |
 | OpenAI via AI Gateway | Coach + meal vision |
 | Runware FLUX | Higher-protein meal visuals |
@@ -57,42 +62,37 @@ Requires **Node 24+**.
 
 ```bash
 cp .env.example .env
-# AI_GATEWAY_API_KEY or OPENAI_API_KEY, WASSIST_API_KEY, RUNWARE_API_KEY
+# AI_GATEWAY_API_KEY, WASSIST_API_KEY, WASSIST_WEBHOOK_SECRET, RUNWARE_API_KEY
 
 npm install
-npm run dev          # interactive: npm exec -- eve dev
-                     # headless:    npm exec -- eve dev --no-ui
+npm run dev
 ```
 
 ### Wire Wassist
 
-1. Sign up at [wassist.app](https://wassist.app/login).  
-2. Create **Bring Your Own Agent** with webhook:
+1. Create a webhook at [wassist.app/developers/webhooks](https://wassist.app/developers/webhooks)  
+2. URL: `https://steadfast-olive.vercel.app/webhook`  
+3. Subscribe to `message.received`  
+4. Copy the signing secret into `WASSIST_WEBHOOK_SECRET`  
+5. Point your number’s routing at this integration (**one** webhook — do not also attach a second BYOA/agent webhook to the same URL)  
+6. Set `WASSIST_API_KEY` so replies can be sent via the Conversations API  
 
-   `https://<your-host>/webhook`
-
-   Production: `https://steadfast-olive.vercel.app/webhook`
-
-3. Message the sandbox number — first turns run **onboarding**.
-
-### Deploy
+## Deploy
 
 ```bash
 npx eve deploy
-# or: npx vercel --yes
 ```
 
-Set env on Vercel:
-- `AI_GATEWAY_API_KEY` (or Gateway OIDC)
+Env vars:
+
+- `AI_GATEWAY_API_KEY` (or Gateway OIDC on Vercel)
 - `WASSIST_API_KEY`
+- `WASSIST_WEBHOOK_SECRET` (required in production — HMAC `x-wassist-signature`)
 - `RUNWARE_API_KEY`
-- `WASSIST_WEBHOOK_SECRET` (HMAC via `x-wassist-signature`, or `X-Wassist-Secret`; BYOA allows unsigned)
-- `CLINICIAN_WEBHOOK_URL` (Slack/PagerDuty for red-flag escalations)
+- `CLINICIAN_WEBHOOK_URL` (optional escalation sink)
 
 Health: `GET /health` → `{"ok":true,"webhook":"/webhook"}`  
 Eve: `GET /eve/v1/health`
-
-Eve custom channels mount authored paths as-is (`/webhook`), not under `/eve/v1/wassist/…`.
 
 ## Demo (live WhatsApp)
 

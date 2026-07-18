@@ -1,81 +1,53 @@
 import { defineChannel, GET, POST } from "eve/channels";
 import { toolResultFrom } from "eve/tools";
-import { isAllowedReplyCallback } from "#lib/callback-url";
-import {
-  createDeliveryKey,
-  signalDelivery,
-  wasDeliveryAbandoned,
-} from "#lib/delivery-wait";
-import { claimInbound, outboundFingerprint } from "#lib/idempotency";
 import { normalizePhone } from "#lib/phone";
+import { rememberInboundMessage } from "#lib/store";
 import {
-  claimPatientInbound,
-  claimPatientOutbound,
-} from "#lib/store";
-import {
-  deliverOutbound,
-  normalizeInboundWebhook,
-  verifyWebhookSecret,
+  authenticateWebhook,
+  parseWebhookBody,
+  sendMessage,
+  type QuickReplyButton,
 } from "#lib/wassist";
 import offerChoices from "../tools/offer_choices";
 import generateMealVisual from "../tools/generate_meal_visual";
 
-type QuickReplyButton = {
-  type: "quick_reply";
-  text: string;
-  quickReplyId: string;
-};
-
-type WassistState = {
+type ChannelState = {
   phoneNumber: string | null;
-  replyCallback: string | null;
   conversationId: string | null;
-  deliveryKey: string | null;
-  idempotencyKey: string | null;
-  /** Set when a duplicate inbound turn should not message the patient. */
-  suppressOutbound: boolean;
+  messageId: string | null;
+  /** True when this WhatsApp message was already handled in a prior turn. */
+  duplicate: boolean;
   pendingButtons: QuickReplyButton[] | null;
   pendingImageUrl: string | null;
-  /** Assembled assistant texts for this turn (sent once on turn.completed). */
   pendingTexts: string[];
-  deliveredThisTurn: boolean;
+  sent: boolean;
 };
 
-type WassistTarget = {
-  phoneNumber: string;
-};
-
-type WassistCtx = {
-  state: WassistState;
-};
+type Target = { phoneNumber: string };
+type Ctx = { state: ChannelState };
 
 function tokenFor(phoneNumber: string) {
   return normalizePhone(phoneNumber);
 }
 
-function freshState(
-  phoneNumber: string | null,
-  replyCallback: string | null = null,
+function initialState(
+  phoneNumber: string | null = null,
   conversationId: string | null = null,
-  deliveryKey: string | null = null,
-  idempotencyKey: string | null = null,
-): WassistState {
+  messageId: string | null = null,
+): ChannelState {
   return {
     phoneNumber,
-    replyCallback,
     conversationId,
-    deliveryKey,
-    idempotencyKey,
-    suppressOutbound: false,
+    messageId,
+    duplicate: false,
     pendingButtons: null,
     pendingImageUrl: null,
     pendingTexts: [],
-    deliveredThisTurn: false,
+    sent: false,
   };
 }
 
 function hasModelCredentials(): boolean {
-  // On Vercel, AI Gateway can authenticate via project OIDC without a raw key.
   return Boolean(
     process.env.AI_GATEWAY_API_KEY ||
       process.env.OPENAI_API_KEY ||
@@ -83,103 +55,70 @@ function hasModelCredentials(): boolean {
   );
 }
 
-async function flushOutbound(
-  channel: { state: WassistState },
-  opts?: { fallbackText?: string; outcome?: "delivered" | "failed" },
-) {
-  const deliveryKey = channel.state.deliveryKey;
-  const outcome = opts?.outcome ?? "delivered";
+function buildUserContent(input: {
+  phoneNumber: string;
+  conversationId: string;
+  text: string;
+  imageUrl: string | null;
+}) {
+  const preface = [
+    `[patient_phone=${input.phoneNumber}]`,
+    `[conversation_id=${input.conversationId}]`,
+    input.imageUrl ? `[meal_image_url=${input.imageUrl}]` : null,
+    input.text || (input.imageUrl ? "I sent a photo of my meal." : "Hi"),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-  if (wasDeliveryAbandoned(deliveryKey)) {
-    return;
-  }
+  if (!input.imageUrl) return preface;
 
-  if (channel.state.suppressOutbound) {
-    console.warn("[wassist] outbound suppressed (duplicate inbound turn)", {
-      phoneNumber: channel.state.phoneNumber,
-      idempotencyKey: channel.state.idempotencyKey,
-    });
-    signalDelivery(deliveryKey, outcome);
-    return;
-  }
-
-  if (channel.state.deliveredThisTurn) {
-    signalDelivery(deliveryKey, outcome);
-    return;
-  }
-
-  const replyCallback = channel.state.replyCallback;
-  const conversationId = channel.state.conversationId;
-  if (!replyCallback && !conversationId) {
-    console.warn("[wassist] no reply_callback/conversationId; dropping outbound", {
-      phoneNumber: channel.state.phoneNumber,
-    });
-    signalDelivery(deliveryKey, "failed");
-    return;
-  }
-
-  const text =
-    channel.state.pendingTexts
-      .map((t) => t.trim())
-      .filter(Boolean)
-      .join("\n\n") || opts?.fallbackText;
-
-  if (!text) {
-    signalDelivery(deliveryKey, outcome === "failed" ? "failed" : "delivered");
-    return;
-  }
-
-  const fingerprint = outboundFingerprint({
-    phoneNumber: channel.state.phoneNumber,
-    conversationId,
-    content: text,
-  });
-  const phone = channel.state.phoneNumber;
-  const durableClaim =
-    phone != null ? claimPatientOutbound(phone, fingerprint) : true;
-  if (!durableClaim) {
-    console.warn("[wassist] skipping duplicate outbound", {
-      phoneNumber: channel.state.phoneNumber,
-      conversationId,
-      chars: text.length,
-    });
-    channel.state.pendingButtons = null;
-    channel.state.pendingImageUrl = null;
-    channel.state.pendingTexts = [];
-    channel.state.deliveredThisTurn = true;
-    signalDelivery(deliveryKey, outcome);
-    return;
-  }
-
-  const buttons = channel.state.pendingButtons;
-  const imageUrl = channel.state.pendingImageUrl;
-
-  channel.state.pendingButtons = null;
-  channel.state.pendingImageUrl = null;
-  channel.state.pendingTexts = [];
-  channel.state.deliveredThisTurn = true;
-
-  try {
-    await deliverOutbound(
-      { replyCallback, conversationId },
-      {
-        content: text,
-        ...(buttons?.length ? { buttons } : {}),
-        ...(imageUrl ? { imageUrl } : {}),
-      },
-    );
-    signalDelivery(deliveryKey, outcome);
-  } catch (err) {
-    channel.state.deliveredThisTurn = false;
-    signalDelivery(deliveryKey, "failed");
-    throw err;
-  }
+  return [
+    { type: "text" as const, text: preface },
+    {
+      type: "file" as const,
+      data: new URL(input.imageUrl),
+      mediaType: "image/jpeg",
+    },
+  ];
 }
 
-export default defineChannel<WassistState, WassistCtx, WassistTarget>({
-  // Server-to-server webhook — no browser CORS needed.
+async function flush(channel: { state: ChannelState }, fallbackText?: string) {
+  const { state } = channel;
+  if (state.duplicate || state.sent) return;
+
+  const conversationId = state.conversationId;
+  if (!conversationId) {
+    console.warn("[wassist] missing conversationId; drop outbound", {
+      phoneNumber: state.phoneNumber,
+    });
+    return;
+  }
+
+  const content =
+    state.pendingTexts
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .join("\n\n") || fallbackText;
+
+  if (!content) return;
+
+  const buttons = state.pendingButtons;
+  const imageUrl = state.pendingImageUrl;
+  state.pendingButtons = null;
+  state.pendingImageUrl = null;
+  state.pendingTexts = [];
+  state.sent = true;
+
+  await sendMessage(conversationId, {
+    content,
+    ...(buttons?.length ? { buttons } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
+  });
+}
+
+export default defineChannel<ChannelState, Ctx, Target>({
   cors: false,
-  state: freshState(null),
+  state: initialState(),
 
   context(state) {
     return { state };
@@ -188,7 +127,7 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
   metadata(state) {
     return {
       phoneNumber: state.phoneNumber,
-      hasCallback: Boolean(state.replyCallback),
+      conversationId: state.conversationId,
     };
   },
 
@@ -197,16 +136,15 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
     return send(input.message, {
       auth: input.auth,
       continuationToken: tokenFor(phoneNumber),
-      state: freshState(phoneNumber),
+      state: initialState(phoneNumber),
       title: `WhatsApp ${phoneNumber}`,
     });
   },
 
   routes: [
     /**
-     * Wassist inbound webhook — WhatsApp is the only patient UI.
-     * Accepts BYOA `{phone_number,…}` and platform `message.received` events.
-     * Mounted at POST /webhook (Eve custom channels use authored paths as-is).
+     * Wassist platform webhook.
+     * Mounted at POST /webhook (Eve custom channels keep authored paths).
      */
     POST("/webhook", async (req, { send, waitUntil }) => {
       let rawBody: string;
@@ -216,140 +154,62 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         return Response.json({ error: "invalid body" }, { status: 400 });
       }
 
-      if (!verifyWebhookSecret(req, rawBody)) {
+      if (!authenticateWebhook(req, rawBody)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
 
-      let parsed: unknown;
+      let body: unknown;
       try {
-        parsed = JSON.parse(rawBody);
+        body = JSON.parse(rawBody);
       } catch {
         return Response.json({ error: "invalid json" }, { status: 400 });
       }
 
-      const inbound = normalizeInboundWebhook(parsed);
-      if ("error" in inbound) {
-        return Response.json({ error: inbound.error }, { status: 400 });
+      const parsed = parseWebhookBody(body);
+      if (parsed.kind === "error") {
+        return Response.json({ error: parsed.error }, { status: 400 });
+      }
+      if (parsed.kind === "ignored") {
+        return Response.json({ ok: true, ignored: parsed.event });
       }
 
-      // test.ping / subscription lifecycle / unknown events — ack only.
-      if (inbound.ignore) {
-        return Response.json({ ok: true, ignored: inbound.event });
-      }
+      const inbound = parsed.message;
 
-      const { phoneNumber, imageUrl, replyCallback, conversationId } = inbound;
-      const text = inbound.text;
-
-      // Wassist often double-delivers (developer webhook + agent fan-out).
-      // Prefer message.id — stable across fan-out — over per-subscription delivery id.
-      const deliveryHeader = req.headers.get("x-wassist-delivery");
-      const idempotencyKey =
-        inbound.messageId ||
-        deliveryHeader?.trim() ||
-        `${phoneNumber}:${conversationId ?? ""}:${text}:${imageUrl ?? ""}`;
-      if (!claimInbound(idempotencyKey)) {
-        console.warn("[wassist] duplicate inbound ignored", {
-          phoneNumber,
-          deliveryHeader,
-          messageId: inbound.messageId,
-        });
-        return Response.json({ ok: true, duplicate: true });
-      }
-
-      if (replyCallback && !isAllowedReplyCallback(replyCallback)) {
-        console.warn("[wassist] rejected reply_callback host", {
-          phoneNumber,
-          host: (() => {
-            try {
-              return new URL(replyCallback).host;
-            } catch {
-              return "invalid";
-            }
-          })(),
-        });
-        return Response.json({ error: "invalid reply_callback" }, { status: 400 });
-      }
-
-      if (imageUrl) {
-        try {
-          const parsedUrl = new URL(imageUrl);
-          if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
-            return Response.json({ error: "invalid image url" }, { status: 400 });
-          }
-        } catch {
-          return Response.json({ error: "invalid image url" }, { status: 400 });
-        }
-      }
-
-      const canDeliver = Boolean(replyCallback || conversationId);
-
-      // Fail fast when the model cannot run — avoid 50s hangs on misconfigured deploys.
-      if (!hasModelCredentials() && canDeliver) {
+      if (!hasModelCredentials()) {
         waitUntil(
-          deliverOutbound(
-            { replyCallback, conversationId },
-            {
-              content:
-                "Steadfast isn't fully configured yet (missing model credentials). Please try again shortly.",
-            },
-          ).catch((err) => {
-            console.error("[wassist] config error delivery failed", err);
+          sendMessage(inbound.conversationId, {
+            content:
+              "Steadfast isn't fully configured yet. Please try again shortly.",
+          }).catch((err) => {
+            console.error("[wassist] config notice failed", err);
           }),
         );
         return Response.json({ ok: true });
       }
 
-      const preface = [
-        `[patient_phone=${phoneNumber}]`,
-        conversationId ? `[conversation_id=${conversationId}]` : null,
-        imageUrl ? `[meal_image_url=${imageUrl}]` : null,
-        text || (imageUrl ? "I sent a photo of my meal." : "Hi"),
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      const content = imageUrl
-        ? [
-            { type: "text" as const, text: preface },
-            {
-              type: "file" as const,
-              data: new URL(imageUrl),
-              mediaType: "image/jpeg",
-            },
-          ]
-        : preface;
-
-      const deliveryKey = createDeliveryKey(phoneNumber);
-
-      // Enqueue the turn only. Do NOT wait on an in-memory delivery latch or
-      // send a timeout apology — turn.completed runs in another isolate, so the
-      // latch never resolves and the apology was spamming WhatsApp ~50s later
-      // (often twice, because Wassist double-delivers each inbound event).
+      // Ack within Wassist's window; coach reply is sent from turn.completed.
       waitUntil(
-        send(content, {
+        send(buildUserContent(inbound), {
           auth: {
             authenticator: "wassist",
             principalType: "user",
-            principalId: phoneNumber,
+            principalId: inbound.phoneNumber,
             attributes: {
-              phoneNumber,
-              replyCallback: replyCallback ?? "",
-              conversationId: conversationId ?? "",
+              phoneNumber: inbound.phoneNumber,
+              conversationId: inbound.conversationId,
+              messageId: inbound.messageId,
             },
           },
-          continuationToken: tokenFor(phoneNumber),
-          state: freshState(
-            phoneNumber,
-            replyCallback,
-            conversationId,
-            deliveryKey,
-            idempotencyKey,
+          continuationToken: tokenFor(inbound.phoneNumber),
+          state: initialState(
+            inbound.phoneNumber,
+            inbound.conversationId,
+            inbound.messageId,
           ),
-          title: `WhatsApp ${phoneNumber}`,
+          title: `WhatsApp ${inbound.phoneNumber}`,
         }).then(() => undefined),
       );
 
-      // Ack fast; coach reply flushes on turn.completed via callback or REST.
       return Response.json({ ok: true });
     }),
 
@@ -369,27 +229,25 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
       channel.state.pendingTexts = [];
       channel.state.pendingButtons = null;
       channel.state.pendingImageUrl = null;
-      channel.state.deliveredThisTurn = false;
-      channel.state.suppressOutbound = false;
+      channel.state.sent = false;
+      channel.state.duplicate = false;
 
-      const phone = channel.state.phoneNumber;
-      const key = channel.state.idempotencyKey;
-      if (phone && key) {
-        try {
-          if (!claimPatientInbound(phone, key)) {
-            channel.state.suppressOutbound = true;
-            console.warn("[wassist] durable duplicate inbound turn", {
-              phoneNumber: phone,
-              idempotencyKey: key,
-            });
-          }
-        } catch (err) {
-          console.warn("[wassist] inbound claim failed", err);
+      const { phoneNumber, messageId } = channel.state;
+      if (phoneNumber && messageId) {
+        // Same WhatsApp message must not run two coach turns.
+        channel.state.duplicate = !rememberInboundMessage(phoneNumber, messageId);
+        if (channel.state.duplicate) {
+          console.info("[wassist] duplicate message skipped", {
+            phoneNumber,
+            messageId,
+          });
         }
       }
     },
 
     "action.result"(eventData, channel) {
+      if (channel.state.duplicate) return;
+
       const choices = toolResultFrom(eventData.result, offerChoices);
       if (choices?.output?.buttons?.length) {
         channel.state.pendingButtons = choices.output.buttons;
@@ -402,8 +260,9 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
     },
 
     "message.completed"(eventData, channel) {
-      // Skip interim narration before tool calls; buffer terminal text for turn flush.
+      if (channel.state.duplicate) return;
       if (eventData.finishReason === "tool-calls") return;
+
       const text =
         typeof eventData.message === "string"
           ? eventData.message.trim()
@@ -414,14 +273,14 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
 
     async "turn.completed"(_eventData, channel) {
       try {
-        await flushOutbound(channel);
+        await flush(channel);
       } catch (err) {
-        console.error("[wassist] turn.completed delivery failed", err);
-        signalDelivery(channel.state.deliveryKey, "failed");
+        console.error("[wassist] turn.completed send failed", err);
       }
     },
 
     async "turn.failed"(eventData, channel) {
+      if (channel.state.duplicate) return;
       const detail =
         typeof eventData.message === "string"
           ? eventData.message
@@ -430,22 +289,21 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         `Sorry — ${detail}. Please try again in a moment. If you feel unwell, contact your clinician or emergency services.`,
       ];
       try {
-        await flushOutbound(channel, { outcome: "failed" });
+        await flush(channel);
       } catch (err) {
-        console.error("[wassist] turn.failed delivery failed", err);
-        signalDelivery(channel.state.deliveryKey, "failed");
+        console.error("[wassist] turn.failed send failed", err);
       }
     },
 
     async "session.failed"(_eventData, channel) {
+      if (channel.state.duplicate) return;
       channel.state.pendingTexts = [
         "Sorry — I'm having trouble right now. Please try again shortly. If this is urgent, contact your clinician or emergency services.",
       ];
       try {
-        await flushOutbound(channel, { outcome: "failed" });
+        await flush(channel);
       } catch (err) {
-        console.error("[wassist] session.failed delivery failed", err);
-        signalDelivery(channel.state.deliveryKey, "failed");
+        console.error("[wassist] session.failed send failed", err);
       }
     },
   },
