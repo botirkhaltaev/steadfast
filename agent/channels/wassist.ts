@@ -2,6 +2,11 @@ import { defineChannel, GET, POST } from "eve/channels";
 import { toolResultFrom } from "eve/tools";
 import { normalizePhone } from "#lib/phone";
 import { buildProactiveCheckInMessage } from "#lib/proactive-checkin";
+import {
+  bumpSessionEpoch,
+  getSessionEpoch,
+  patientContinuationToken,
+} from "#lib/session-epoch";
 import { waitForTurnSettlement } from "#lib/session-wait";
 import {
   getPatient,
@@ -31,10 +36,6 @@ type ChannelState = {
 
 type Target = { phoneNumber: string };
 type Ctx = { state: ChannelState };
-
-function tokenFor(phoneNumber: string) {
-  return normalizePhone(phoneNumber);
-}
 
 function initialState(
   phoneNumber: string | null = null,
@@ -141,7 +142,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
     const phoneNumber = normalizePhone(input.target.phoneNumber);
     return send(input.message, {
       auth: input.auth,
-      continuationToken: tokenFor(phoneNumber),
+      continuationToken: patientContinuationToken(phoneNumber),
       state: initialState(phoneNumber),
       title: `WhatsApp ${phoneNumber}`,
     });
@@ -208,7 +209,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
               messageId: inbound.messageId,
             },
           },
-          continuationToken: tokenFor(inbound.phoneNumber),
+          continuationToken: patientContinuationToken(inbound.phoneNumber),
           state: initialState(
             inbound.phoneNumber,
             inbound.conversationId,
@@ -226,10 +227,43 @@ export default defineChannel<ChannelState, Ctx, Target>({
         ok: true,
         service: "scout-sage-wassist",
         webhook: "/webhook",
+        resetAll: "/reset-all",
+        sessionEpoch: getSessionEpoch(),
         authConfigured: Boolean(process.env.WASSIST_WEBHOOK_SECRET),
         modelConfigured: hasModelCredentials(),
       }),
     ),
+
+    /**
+     * Demo: wipe all patient sessions by bumping the session epoch.
+     * Next WhatsApp message for any phone starts a blank onboarding profile.
+     * Header: x-demo-reset-secret: <DEMO_RESET_SECRET>
+     */
+    POST("/reset-all", async (req) => {
+      const secret = process.env.DEMO_RESET_SECRET?.trim();
+      if (!secret) {
+        return Response.json(
+          { error: "DEMO_RESET_SECRET is not configured" },
+          { status: 503 },
+        );
+      }
+      const provided = req.headers.get("x-demo-reset-secret")?.trim() ?? "";
+      if (provided !== secret) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      const previousEpoch = getSessionEpoch();
+      const sessionEpoch = bumpSessionEpoch();
+
+      console.info("[wassist] reset-all", { previousEpoch, sessionEpoch });
+      return Response.json({
+        ok: true,
+        reset: "all",
+        previousEpoch,
+        sessionEpoch,
+        note: "All phones will start a fresh Eve session on their next WhatsApp message.",
+      });
+    }),
 
     /**
      * Demo / ops: force a proactive check-in for one patient.
@@ -290,7 +324,7 @@ export default defineChannel<ChannelState, Ctx, Target>({
                   conversationId,
                 },
               },
-              continuationToken: tokenFor(phoneNumber),
+              continuationToken: patientContinuationToken(phoneNumber),
               state: initialState(phoneNumber, conversationId),
               title: `WhatsApp ${phoneNumber}`,
             },
