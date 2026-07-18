@@ -2,6 +2,8 @@ import { defineChannel, GET, POST } from "eve/channels";
 import { toolResultFrom } from "eve/tools";
 import { normalizePhone } from "#lib/phone";
 import { buildProactiveCheckInMessage } from "#lib/proactive-checkin";
+import { clearAllDeviceSupportLinks } from "#lib/device-support";
+import { clearAllEscalations } from "#lib/escalation-queue";
 import {
   bumpSessionEpoch,
   getSessionEpoch,
@@ -274,21 +276,30 @@ export default defineChannel<ChannelState, Ctx, Target>({
     ),
 
     /**
-     * Demo: wipe all patient sessions by bumping the session epoch.
-     * Next WhatsApp message for any phone starts a blank onboarding profile.
+     * Demo: wipe Eve sessions (epoch bump) and shared Neon state
+     * (clinician inbox + Gemini Live links) so handoff returns to AI.
      * Open on purpose for hackathon demos — no auth.
      */
     POST("/eve/v1/wassist/reset-all", async () => {
       const previousEpoch = await getSessionEpoch();
       const sessionEpoch = await bumpSessionEpoch();
+      const escalationsCleared = await clearAllEscalations();
+      const deviceLinksCleared = await clearAllDeviceSupportLinks();
 
-      console.info("[wassist] reset-all", { previousEpoch, sessionEpoch });
+      console.info("[wassist] reset-all", {
+        previousEpoch,
+        sessionEpoch,
+        escalationsCleared,
+        deviceLinksCleared,
+      });
       return Response.json({
         ok: true,
         reset: "all",
         previousEpoch,
         sessionEpoch,
-        note: "All phones will start a fresh Eve session on their next WhatsApp message.",
+        escalationsCleared,
+        deviceLinksCleared,
+        note: "All phones will start a fresh Eve session on their next WhatsApp message. Open clinician handoffs and device-support links were cleared.",
       });
     }),
 

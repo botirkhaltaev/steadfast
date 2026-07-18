@@ -145,13 +145,13 @@ Health: `GET /eve/v1/wassist/health` · Eve: `GET /eve/v1/health` · Inbox: `GET
 
 ### Demo reset (wipe all sessions)
 
-Patient coaching data lives in Eve durable **sessions**. Shared inbox / epoch / Gemini Live link state lives in **Neon**. Restarting the app does **not** clear either. To demo from scratch (new Eve sessions only):
+Patient coaching data lives in Eve durable **sessions**. Shared inbox / epoch / Gemini Live link state lives in **Neon**. Restarting the app does **not** clear either. To demo from scratch:
 
 ```bash
 curl -X POST https://<your-host>/eve/v1/wassist/reset-all
 ```
 
-This bumps a session epoch so every phone gets a **new** Eve session on the next WhatsApp message (blank onboarding / eMed). Open endpoint — no auth (hackathon demos).
+This bumps a session epoch so every phone gets a **new** Eve session on the next WhatsApp message (blank onboarding / eMed), and clears Neon clinician escalations plus Gemini Live / Tasso device-support links so handoff returns to AI. Open endpoint — no auth (hackathon demos).
 
 ## Demo (live WhatsApp + clinician inbox)
 

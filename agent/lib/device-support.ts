@@ -268,6 +268,15 @@ export async function resetLinkToSent(sid: string): Promise<void> {
     .where(eq(deviceSupportLinks.sid, sid));
 }
 
+/** Demo wipe: delete every Gemini Live / Tasso link row. Returns how many were removed. */
+export async function clearAllDeviceSupportLinks(): Promise<number> {
+  const db = getDb();
+  const deleted = await db
+    .delete(deviceSupportLinks)
+    .returning({ sid: deviceSupportLinks.sid });
+  return deleted.length;
+}
+
 export async function markLinkOutcome(
   sid: string,
   outcome: DeviceSupportOutcome,
