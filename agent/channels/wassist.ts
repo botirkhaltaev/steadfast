@@ -159,10 +159,17 @@ export default defineChannel<ChannelState, Ctx, Target>({
 
   async receive(input, { send }) {
     const phoneNumber = normalizePhone(input.target.phoneNumber);
+    // Cross-channel / schedule resumes may not carry conversationId — hydrate from patient.
+    let conversationId: string | null = null;
+    try {
+      conversationId = getPatient(phoneNumber).conversationId ?? null;
+    } catch {
+      conversationId = null;
+    }
     return send(input.message, {
       auth: input.auth,
       continuationToken: patientContinuationToken(phoneNumber),
-      state: initialState(phoneNumber),
+      state: initialState(phoneNumber, conversationId),
       title: `WhatsApp ${phoneNumber}`,
     });
   },

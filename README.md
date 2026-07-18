@@ -77,6 +77,7 @@ Diet and protein target are optional. Coaching, optional meal vision, and risk s
 | Eve `defineState` | Patient DB incl. condition + eMed link/readings + handoff |
 | OpenAI via AI Gateway | Coach + meal vision + voice transcription |
 | Runware FLUX | Optional higher-protein meal visuals |
+| Gemini Live API | Tasso+ voice + vision device helper (browser link) |
 
 ## Setup
 
@@ -85,6 +86,7 @@ Requires **Node 24+**.
 ```bash
 cp .env.example .env
 # AI_GATEWAY_API_KEY, WASSIST_API_KEY, WASSIST_WEBHOOK_SECRET, RUNWARE_API_KEY
+# GEMINI_API_KEY, PUBLIC_BASE_URL, DEVICE_SUPPORT_LINK_SECRET (Tasso+ live helper)
 
 npm install
 npm run dev          # Next on :3000 — Eve boots alongside via withEve
@@ -95,6 +97,12 @@ Open the clinician inbox at [http://localhost:3000](http://localhost:3000).
 Eve-only (no UI): `npm run dev:eve`.
 
 Optional: `NEXT_PUBLIC_EVE_URL` if the UI must call a remote Eve origin (same-origin is the default with `withEve`).
+
+### Tasso+ live device helper (Gemini Live)
+
+When a patient struggles with their Tasso+ blood kit, Scout calls `start_device_support_session` and sends a one-time browser link (`/eve/v1/device-support?t=…`). The page requests camera + mic, mints a short-lived Gemini Live ephemeral token from this app, and runs a voice + vision troubleshooting session grounded in the Tasso+ Instructions For Use. On end, the outcome resumes the WhatsApp thread so Scout can follow up.
+
+Requires `GEMINI_API_KEY`, `PUBLIC_BASE_URL` (e.g. `https://steadfast-olive.vercel.app`), and preferably `DEVICE_SUPPORT_LINK_SECRET`.
 
 ### eMed health data (onboarding)
 
@@ -111,7 +119,7 @@ Patients explicitly choose during onboarding. **Connect** links per-user eMed he
 
 ## Deploy
 
-This repo is a **Next.js + Eve** project. Deploy the Next app to Vercel; `withEve` wires the Eve service and proxies `/eve/v1/**` (including Wassist + clinician channel routes).
+This repo is a **Next.js + Eve** project. Deploy the Next app to Vercel; `withEve` wires the Eve service and proxies `/eve/v1/**` (including Wassist, clinician, and Tasso+ `/eve/v1/device-support` channel routes).
 
 ```bash
 npm run build
@@ -124,10 +132,13 @@ Env vars:
 - `WASSIST_API_KEY`
 - `WASSIST_WEBHOOK_SECRET` (required in production — HMAC `x-wassist-signature`)
 - `RUNWARE_API_KEY`
+- `GEMINI_API_KEY` (Tasso+ Gemini Live helper)
+- `PUBLIC_BASE_URL` (origin used in WhatsApp device-support links)
+- `DEVICE_SUPPORT_LINK_SECRET` (HMAC for one-time links; falls back to webhook secret)
 - `CLINICIAN_WEBHOOK_URL` (optional Slack/PagerDuty notify on escalate)
 - `NEXT_PUBLIC_EVE_URL` (optional; only if UI is not same-origin)
 
-Health: `GET /eve/v1/wassist/health` · Eve: `GET /eve/v1/health` · Inbox: `GET /`
+Health: `GET /eve/v1/wassist/health` · Eve: `GET /eve/v1/health` · Inbox: `GET /` · Device help: `GET /eve/v1/device-support`
 
 ### Demo reset (wipe all sessions)
 
@@ -148,6 +159,7 @@ This bumps a session epoch so every phone gets a **new** Eve session on the next
 5. Optional: lunch photo → protein estimate + Runware upgrade image
 6. “Bad stomach pain” → Scout → Sage → `escalate_to_clinician` → patient told a **human** is joining
 7. Open `/` → case → reply on WhatsApp → Resolve / return to Scout
+8. “My Tasso+ isn’t collecting blood” → Scout sends `/eve/v1/device-support` live link → patient opens camera+mic helper → Scout follows up on outcome
 
 ## Safety
 

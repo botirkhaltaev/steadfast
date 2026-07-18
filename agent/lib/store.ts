@@ -74,6 +74,25 @@ export type SageBrief = {
   createdAt: string;
 };
 
+/** Gemini Live Tasso+ browser support session (link → live call → outcome). */
+export type DeviceSupportStatus =
+  | "link_sent"
+  | "started"
+  | "completed"
+  | "abandoned"
+  | "escalate";
+
+export type DeviceSupportSession = {
+  id: string;
+  reason: string | null;
+  status: DeviceSupportStatus;
+  summary: string | null;
+  issuedAt: string;
+  expiresAt: string;
+  startedAt?: string;
+  endedAt?: string;
+};
+
 export type Patient = {
   phoneNumber: string;
   onboardingStatus: OnboardingStatus;
@@ -101,6 +120,8 @@ export type Patient = {
   emedDevice: EmedDeviceLink | null;
   /** Durable biomarker readings from the linked eMed data. */
   emedReadings: EmedReading[];
+  /** Recent Tasso+ Gemini Live device-support sessions. */
+  deviceSupportSessions: DeviceSupportSession[];
   conversationId?: string;
   /** ISO timestamp of last agent-initiated check-in. */
   lastProactiveCheckInAt?: string;
@@ -139,6 +160,7 @@ function blankPatient(phoneNumber = ""): Patient {
     emedSetupStatus: "pending",
     emedDevice: null,
     emedReadings: [],
+    deviceSupportSessions: [],
     createdAt: ts,
     updatedAt: ts,
   };
@@ -393,6 +415,102 @@ export function markProactiveCheckInSent(phoneNumber: string): Patient {
   return updatePatient(phoneNumber, {
     lastProactiveCheckInAt: now(),
   });
+}
+
+/** Record that Scout issued a Tasso+ live-support link. */
+export function createDeviceSupportSession(
+  phoneNumber: string,
+  input: {
+    id: string;
+    reason?: string | null;
+    expiresAt: string;
+  },
+): DeviceSupportSession {
+  const phone = normalizePhone(phoneNumber);
+  getPatient(phone);
+  const session: DeviceSupportSession = {
+    id: input.id,
+    reason: input.reason?.trim() || null,
+    status: "link_sent",
+    summary: null,
+    issuedAt: now(),
+    expiresAt: input.expiresAt,
+  };
+  patientState.update((p) => ({
+    ...p,
+    deviceSupportSessions: [...(p.deviceSupportSessions ?? []), session].slice(
+      -10,
+    ),
+    updatedAt: now(),
+  }));
+  return session;
+}
+
+/** Mark a device-support session as started (browser opened live call). */
+export function markDeviceSupportStarted(
+  phoneNumber: string,
+  sessionId: string,
+): DeviceSupportSession | null {
+  const phone = normalizePhone(phoneNumber);
+  getPatient(phone);
+  let updated: DeviceSupportSession | null = null;
+  const ts = now();
+  patientState.update((p) => {
+    const sessions = (p.deviceSupportSessions ?? []).map((s) => {
+      if (s.id !== sessionId) return s;
+      updated = {
+        ...s,
+        status: s.status === "link_sent" ? "started" : s.status,
+        startedAt: s.startedAt ?? ts,
+      };
+      return updated;
+    });
+    return { ...p, deviceSupportSessions: sessions, updatedAt: ts };
+  });
+  return updated;
+}
+
+/** Persist the browser live-session outcome onto the patient record. */
+export function recordDeviceSupportOutcome(
+  phoneNumber: string,
+  input: {
+    sessionId: string;
+    status: Exclude<DeviceSupportStatus, "link_sent" | "started">;
+    summary?: string | null;
+  },
+): DeviceSupportSession | null {
+  const phone = normalizePhone(phoneNumber);
+  getPatient(phone);
+  let updated: DeviceSupportSession | null = null;
+  const ts = now();
+  patientState.update((p) => {
+    const sessions = (p.deviceSupportSessions ?? []).map((s) => {
+      if (s.id !== input.sessionId) return s;
+      updated = {
+        ...s,
+        status: input.status,
+        summary: input.summary?.trim() || s.summary,
+        endedAt: ts,
+        startedAt: s.startedAt ?? ts,
+      };
+      return updated;
+    });
+    return { ...p, deviceSupportSessions: sessions, updatedAt: ts };
+  });
+  return updated;
+}
+
+/** Count device-support links issued for this patient in the last 24h. */
+export function countRecentDeviceSupportLinks(
+  phoneNumber: string,
+  withinMs = 24 * 60 * 60 * 1000,
+): number {
+  const patient = getPatient(phoneNumber);
+  const cutoff = Date.now() - withinMs;
+  return (patient.deviceSupportSessions ?? []).filter((s) => {
+    const issued = Date.parse(s.issuedAt);
+    return Number.isFinite(issued) && issued >= cutoff;
+  }).length;
 }
 
 /**

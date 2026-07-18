@@ -68,6 +68,7 @@ export default defineTool({
         ? 1
         : p.escalations.filter((e) => e.status === "open" || e.status === "notified")
             .length,
+      recentDeviceSupportSessions: (p.deviceSupportSessions ?? []).slice(-3),
     };
   },
 });
