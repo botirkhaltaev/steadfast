@@ -1,6 +1,6 @@
 import { normalizePhone } from "#lib/phone";
 
-export const EMED_DEVICE_LABEL = "eMed Home Monitor";
+export const EMED_DEVICE_LABEL = "eMed health data";
 
 export type EmedDeviceLink = {
   deviceId: string;

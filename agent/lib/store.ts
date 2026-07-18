@@ -31,10 +31,13 @@ export type CheckIn = {
   resistanceSessions?: number;
 };
 
-/** Future human-clinician handoff card. Kept for deferred escalation path. */
+export type HandoffStatus = "ai" | "human";
+
+/** Human-clinician handoff card (also mirrored to the global escalation queue). */
 export type EscalationCard = {
   id: string;
   phoneNumber: string;
+  conversationId: string;
   patientName: string;
   week: number | null;
   dose: string | null;
@@ -43,7 +46,7 @@ export type EscalationCard = {
   summary: string;
   transcriptSnippet: string;
   redFlag: string;
-  status: "open" | "notified";
+  status: "open" | "notified" | "resolved";
   createdAt: string;
   updatedAt: string;
 };
@@ -94,9 +97,12 @@ export type Patient = {
   phoneNumber: string;
   onboardingStatus: OnboardingStatus;
   name: string | null;
+  /** Condition / programme (e.g. weight management, diabetes, heart health). */
+  condition: string | null;
   week: number | null;
   dose: string | null;
   medication: string | null;
+  /** Optional lifestyle fields — not required for onboarding. */
   diet: string | null;
   proteinTargetG: number | null;
   checkInFrequency: CheckInFrequency | null;
@@ -106,11 +112,13 @@ export type Patient = {
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
   sageBriefs: SageBrief[];
+  /** Who owns the WhatsApp thread: Scout/Sage (ai) or human clinician. */
+  handoffStatus: HandoffStatus;
   /** Required onboarding answer for eMed connect step. */
   emedSetupStatus: EmedSetupStatus;
-  /** Linked eMed home monitor after patient chooses Connect. */
+  /** Linked eMed health data after patient chooses Connect. */
   emedDevice: EmedDeviceLink | null;
-  /** Durable biomarker readings from the linked eMed device. */
+  /** Durable biomarker readings from the linked eMed data. */
   emedReadings: EmedReading[];
   /** Recent Tasso+ Gemini Live device-support sessions. */
   deviceSupportSessions: DeviceSupportSession[];
@@ -135,6 +143,7 @@ function blankPatient(phoneNumber = ""): Patient {
     phoneNumber,
     onboardingStatus: "not_started",
     name: null,
+    condition: null,
     week: null,
     dose: null,
     medication: null,
@@ -147,6 +156,7 @@ function blankPatient(phoneNumber = ""): Patient {
     dropoutRisk: "low",
     escalations: [],
     sageBriefs: [],
+    handoffStatus: "ai",
     emedSetupStatus: "pending",
     emedDevice: null,
     emedReadings: [],
@@ -183,7 +193,6 @@ export function getPatient(phoneNumber: string): Patient {
     );
   }
 
-  // Canonicalize formatting if needed.
   if (current.phoneNumber !== phone) {
     patientState.update((p) => ({ ...p, phoneNumber: phone, updatedAt: now() }));
   }
@@ -249,7 +258,7 @@ export function listEmedReadings(
   };
 }
 
-/** Onboarding: patient chose Connect — link device and sync stand-in readings. */
+/** Onboarding: patient chose Connect — link device and seed readings. */
 export function linkEmedDevice(phoneNumber: string): {
   patient: Patient;
   connectSummary: { deviceLabel: string; weightKg: number; asOf: string };
@@ -295,6 +304,7 @@ export function createEscalation(
   const card: EscalationCard = {
     ...input,
     phoneNumber: normalizePhone(input.phoneNumber),
+    conversationId: input.conversationId.trim(),
     id: crypto.randomUUID(),
     status: "open",
     createdAt: ts,
@@ -304,6 +314,8 @@ export function createEscalation(
   patientState.update((p) => ({
     ...p,
     escalations: [...p.escalations, card],
+    handoffStatus: "human",
+    conversationId: card.conversationId || p.conversationId,
     updatedAt: ts,
   }));
   return card;
@@ -318,6 +330,26 @@ export function markEscalationNotified(phoneNumber: string, escalationId: string
     ),
     updatedAt: now(),
   }));
+}
+
+export function markEscalationResolved(phoneNumber: string, escalationId: string): void {
+  getPatient(phoneNumber);
+  const ts = now();
+  patientState.update((p) => ({
+    ...p,
+    escalations: p.escalations.map((e) =>
+      e.id === escalationId ? { ...e, status: "resolved" as const, updatedAt: ts } : e,
+    ),
+    handoffStatus: "ai",
+    updatedAt: ts,
+  }));
+}
+
+export function setHandoffStatus(
+  phoneNumber: string,
+  handoffStatus: HandoffStatus,
+): Patient {
+  return updatePatient(phoneNumber, { handoffStatus });
 }
 
 export function requireOnboarded(phoneNumber: string): Patient {
@@ -354,11 +386,10 @@ export function computeRiskScore(patient: Patient): DropoutRisk {
 export function missingOnboardingFields(patient: Patient): string[] {
   const missing: string[] = [];
   if (!patient.name) missing.push("name");
+  if (!patient.condition) missing.push("condition");
   if (!patient.medication) missing.push("medication");
   if (!patient.dose) missing.push("dose");
   if (patient.week == null) missing.push("week");
-  if (!patient.diet) missing.push("diet");
-  if (patient.proteinTargetG == null) missing.push("proteinTargetG");
   if (!patient.checkInFrequency) missing.push("checkInFrequency");
   if (patient.emedSetupStatus === "pending") missing.push("emedSetup");
   return missing;

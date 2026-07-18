@@ -1,10 +1,5 @@
 {
-  "buildCommand": "npx eve build",
+  "framework": "nextjs",
   "installCommand": "npm install",
-  "framework": null,
-  "functions": {
-    "**/*.js": {
-      "maxDuration": 60
-    }
-  }
+  "buildCommand": "npm run build"
 }
