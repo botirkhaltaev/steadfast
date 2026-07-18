@@ -1,6 +1,7 @@
 import { defineChannel, GET, POST } from "eve/channels";
 import { toolResultFrom } from "eve/tools";
 import { normalizePhone } from "#lib/phone";
+import { waitForTurnSettlement } from "#lib/session-wait";
 import {
   sendViaCallback,
   verifyWebhookSecret,
@@ -157,22 +158,39 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
           ]
         : preface;
 
+      // Critical: waitUntil must cover the full turn. send() resolves early;
+      // without waiting for settlement, Vercel can freeze before reply_callback.
       waitUntil(
-        send(content, {
-          auth: {
-            authenticator: "wassist",
-            principalType: "user",
-            principalId: phoneNumber,
-            attributes: {
-              phoneNumber,
-              replyCallback: replyCallback ?? "",
-              conversationId: conversationId ?? "",
+        (async () => {
+          const session = await send(content, {
+            auth: {
+              authenticator: "wassist",
+              principalType: "user",
+              principalId: phoneNumber,
+              attributes: {
+                phoneNumber,
+                replyCallback: replyCallback ?? "",
+                conversationId: conversationId ?? "",
+              },
             },
-          },
-          continuationToken: tokenFor(phoneNumber),
-          state: freshState(phoneNumber, replyCallback, conversationId),
-          title: `WhatsApp ${phoneNumber}`,
-        }).then(() => undefined),
+            continuationToken: tokenFor(phoneNumber),
+            state: freshState(phoneNumber, replyCallback, conversationId),
+            title: `WhatsApp ${phoneNumber}`,
+          });
+
+          const outcome = await waitForTurnSettlement(session);
+          if (outcome === "timeout" && replyCallback) {
+            // Channel events may not have flushed; last-resort patient-visible message.
+            try {
+              await sendViaCallback(replyCallback, {
+                content:
+                  "Sorry — I'm taking longer than expected. Please send that again in a moment. If you feel unwell, contact your clinician or emergency services.",
+              });
+            } catch (err) {
+              console.error("[wassist] timeout fallback callback failed", err);
+            }
+          }
+        })(),
       );
 
       // No customer-visible ack; coach reply flushes on turn.completed via callback.
