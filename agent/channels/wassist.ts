@@ -10,9 +10,9 @@ import {
 } from "#lib/delivery-wait";
 import { normalizePhone } from "#lib/phone";
 import {
-  sendViaCallback,
+  deliverOutbound,
+  normalizeInboundWebhook,
   verifyWebhookSecret,
-  type WassistWebhookPayload,
 } from "#lib/wassist";
 import offerChoices from "../tools/offer_choices";
 import generateMealVisual from "../tools/generate_meal_visual";
@@ -94,8 +94,9 @@ async function flushOutbound(
   }
 
   const replyCallback = channel.state.replyCallback;
-  if (!replyCallback) {
-    console.warn("[wassist] no reply_callback; dropping outbound", {
+  const conversationId = channel.state.conversationId;
+  if (!replyCallback && !conversationId) {
+    console.warn("[wassist] no reply_callback/conversationId; dropping outbound", {
       phoneNumber: channel.state.phoneNumber,
     });
     signalDelivery(deliveryKey, "failed");
@@ -122,11 +123,14 @@ async function flushOutbound(
   channel.state.deliveredThisTurn = true;
 
   try {
-    await sendViaCallback(replyCallback, {
-      content: text,
-      ...(buttons?.length ? { buttons } : {}),
-      ...(imageUrl ? { imageUrl } : {}),
-    });
+    await deliverOutbound(
+      { replyCallback, conversationId },
+      {
+        content: text,
+        ...(buttons?.length ? { buttons } : {}),
+        ...(imageUrl ? { imageUrl } : {}),
+      },
+    );
     signalDelivery(deliveryKey, outcome);
   } catch (err) {
     channel.state.deliveredThisTurn = false;
@@ -163,7 +167,8 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
 
   routes: [
     /**
-     * Wassist BYOA webhook — WhatsApp is the only patient UI.
+     * Wassist inbound webhook — WhatsApp is the only patient UI.
+     * Accepts BYOA `{phone_number,…}` and platform `message.received` events.
      * Mounted at POST /webhook (Eve custom channels use authored paths as-is).
      */
     POST("/webhook", async (req, { send, waitUntil }) => {
@@ -178,22 +183,25 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
 
-      let body: WassistWebhookPayload;
+      let parsed: unknown;
       try {
-        body = JSON.parse(rawBody) as WassistWebhookPayload;
+        parsed = JSON.parse(rawBody);
       } catch {
         return Response.json({ error: "invalid json" }, { status: 400 });
       }
 
-      const phoneNumber = normalizePhone(body.phone_number ?? "");
-      if (!phoneNumber) {
-        return Response.json({ error: "phone_number required" }, { status: 400 });
+      const inbound = normalizeInboundWebhook(parsed);
+      if ("error" in inbound) {
+        return Response.json({ error: inbound.error }, { status: 400 });
       }
 
-      const text = (body.message ?? "").trim();
-      const imageUrl = body.image ?? null;
-      const replyCallback = body.reply_callback?.trim() || null;
-      const conversationId = body.conversation_id ?? null;
+      // test.ping / subscription lifecycle / unknown events — ack only.
+      if (inbound.ignore) {
+        return Response.json({ ok: true, ignored: inbound.event });
+      }
+
+      const { phoneNumber, imageUrl, replyCallback, conversationId } = inbound;
+      const text = inbound.text;
 
       if (replyCallback && !isAllowedReplyCallback(replyCallback)) {
         console.warn("[wassist] rejected reply_callback host", {
@@ -211,8 +219,8 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
 
       if (imageUrl) {
         try {
-          const parsed = new URL(imageUrl);
-          if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          const parsedUrl = new URL(imageUrl);
+          if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
             return Response.json({ error: "invalid image url" }, { status: 400 });
           }
         } catch {
@@ -220,17 +228,22 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         }
       }
 
+      const canDeliver = Boolean(replyCallback || conversationId);
+
       // Fail fast when the model cannot run — avoid 50s hangs on misconfigured deploys.
-      if (!hasModelCredentials() && replyCallback) {
+      if (!hasModelCredentials() && canDeliver) {
         waitUntil(
-          sendViaCallback(replyCallback, {
-            content:
-              "Steadfast isn't fully configured yet (missing model credentials). Please try again shortly.",
-          }).catch((err) => {
-            console.error("[wassist] config error callback failed", err);
+          deliverOutbound(
+            { replyCallback, conversationId },
+            {
+              content:
+                "Steadfast isn't fully configured yet (missing model credentials). Please try again shortly.",
+            },
+          ).catch((err) => {
+            console.error("[wassist] config error delivery failed", err);
           }),
         );
-        return Response.json({ content: "No CUSTOMER message reply" });
+        return Response.json({ ok: true });
       }
 
       const preface = [
@@ -257,7 +270,7 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
 
       // Critical: waitUntil must cover flushOutbound. send() resolves early;
       // getEventStream replay is the wrong signal (stale session.waiting).
-      // Channel handlers signal this latch after the WhatsApp callback POST.
+      // Channel handlers signal this latch after WhatsApp delivery completes.
       waitUntil(
         (async () => {
           const delivery = armDeliveryWait(deliveryKey);
@@ -290,25 +303,24 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
             }),
           ]);
 
-          if (
-            outcome === "timeout" &&
-            replyCallback &&
-            abandonDelivery(deliveryKey)
-          ) {
+          if (outcome === "timeout" && canDeliver && abandonDelivery(deliveryKey)) {
             try {
-              await sendViaCallback(replyCallback, {
-                content:
-                  "Sorry — I'm taking longer than expected. Please send that again in a moment. If you feel unwell, contact your clinician or emergency services.",
-              });
+              await deliverOutbound(
+                { replyCallback, conversationId },
+                {
+                  content:
+                    "Sorry — I'm taking longer than expected. Please send that again in a moment. If you feel unwell, contact your clinician or emergency services.",
+                },
+              );
             } catch (err) {
-              console.error("[wassist] timeout fallback callback failed", err);
+              console.error("[wassist] timeout fallback delivery failed", err);
             }
           }
         })(),
       );
 
-      // No customer-visible ack; coach reply flushes on turn.completed via callback.
-      return Response.json({ content: "No CUSTOMER message reply" });
+      // Ack fast; coach reply flushes on turn.completed via callback or REST.
+      return Response.json({ ok: true });
     }),
 
     GET("/health", async () =>

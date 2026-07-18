@@ -1,12 +1,26 @@
 import "#lib/env-bootstrap";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { normalizePhone } from "#lib/phone";
 
+/** Legacy BYOA webhook body. */
 export type WassistWebhookPayload = {
   message?: string | null;
   image?: string | null;
   phone_number: string;
   reply_callback?: string | null;
   conversation_id?: string | null;
+};
+
+/** Normalized inbound after accepting BYOA or platform event envelopes. */
+export type NormalizedInbound = {
+  phoneNumber: string;
+  text: string;
+  imageUrl: string | null;
+  replyCallback: string | null;
+  conversationId: string | null;
+  event: string | null;
+  /** Lifecycle / ping / unknown events — ack without running the agent. */
+  ignore: boolean;
 };
 
 export type QuickReplyButton = {
@@ -98,28 +112,178 @@ export async function sendViaRest(opts: {
   }
 
   const base = process.env.WASSIST_API_BASE ?? "https://backend.wassist.app/api/v1";
-  const body =
-    opts.buttons?.length || opts.imageUrl
-      ? buildUnified({
+  const hasRich = Boolean(opts.buttons?.length || opts.imageUrl);
+  const bodies: unknown[] = hasRich
+    ? [
+        buildUnified({
           content: opts.content,
           imageUrl: opts.imageUrl,
           buttons: opts.buttons,
-        })
-      : { type: "text", text: { body: opts.content } };
+        }),
+        { type: "text", text: { body: opts.content } },
+      ]
+    : [
+        { type: "text", text: { body: opts.content } },
+        buildUnified({ content: opts.content }),
+      ];
 
-  const res = await fetch(`${base}/conversations/${opts.conversationId}/messages/`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": apiKey,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Wassist REST send failed (${res.status}): ${text}`);
+  let lastStatus = 0;
+  let lastText = "";
+  for (const body of bodies) {
+    const res = await fetch(
+      `${base}/conversations/${opts.conversationId}/messages/`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    if (res.ok) return;
+    lastStatus = res.status;
+    lastText = await res.text().catch(() => "");
   }
+
+  throw new Error(`Wassist REST send failed (${lastStatus}): ${lastText}`);
+}
+
+/**
+ * Deliver a coach reply via BYOA reply_callback, or platform REST when only
+ * conversationId is available (developer / subscription webhooks).
+ */
+export async function deliverOutbound(
+  dest: { replyCallback?: string | null; conversationId?: string | null },
+  payload: WassistOutbound,
+): Promise<void> {
+  if (dest.replyCallback) {
+    await sendViaCallback(dest.replyCallback, payload);
+    return;
+  }
+  if (dest.conversationId) {
+    await sendViaRest({
+      conversationId: dest.conversationId,
+      content: payload.content,
+      imageUrl: payload.imageUrl,
+      buttons: payload.buttons,
+    });
+    return;
+  }
+  throw new Error("No reply_callback or conversationId for outbound delivery");
+}
+
+function extractMediaUrl(media: unknown[]): string | null {
+  for (const item of media) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    for (const key of ["url", "imageUrl", "image", "link", "href"] as const) {
+      const value = row[key];
+      if (typeof value === "string" && /^https?:\/\//i.test(value)) {
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
+function buttonHint(buttons: unknown[]): string {
+  const ids: string[] = [];
+  for (const item of buttons) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const id =
+      (typeof row.quickReplyId === "string" && row.quickReplyId) ||
+      (typeof row.id === "string" && row.id) ||
+      (typeof row.payload === "string" && row.payload) ||
+      "";
+    if (id) ids.push(id);
+  }
+  return ids.length ? `[quick_reply=${ids.join(",")}]` : "";
+}
+
+/**
+ * Accept both:
+ * - BYOA: `{ phone_number, message, image?, reply_callback?, conversation_id? }`
+ * - Platform: `{ event: "message.received", contact.phoneNumber, message.body, conversationId }`
+ */
+export function normalizeInboundWebhook(body: unknown): NormalizedInbound | { error: string } {
+  if (!body || typeof body !== "object") {
+    return { error: "invalid payload" };
+  }
+  const b = body as Record<string, unknown>;
+
+  // Platform / developer webhook envelope
+  if (typeof b.event === "string") {
+    const event = b.event;
+    const actionable =
+      event === "message.received" || event === "subscription.message.received";
+    if (!actionable) {
+      return {
+        phoneNumber: "",
+        text: "",
+        imageUrl: null,
+        replyCallback: null,
+        conversationId:
+          typeof b.conversationId === "string" ? b.conversationId : null,
+        event,
+        ignore: true,
+      };
+    }
+
+    const contact =
+      b.contact && typeof b.contact === "object"
+        ? (b.contact as Record<string, unknown>)
+        : {};
+    const message =
+      b.message && typeof b.message === "object"
+        ? (b.message as Record<string, unknown>)
+        : {};
+
+    // Customer phone — never use business `phoneNumber` / `whatsappNumber`.
+    const rawPhone = String(contact.phoneNumber ?? b.from ?? "").trim();
+    const phoneNumber = normalizePhone(rawPhone);
+    if (!phoneNumber) {
+      return { error: "phone_number required" };
+    }
+
+    const bodyText = typeof message.body === "string" ? message.body.trim() : "";
+    const media = Array.isArray(message.media) ? message.media : [];
+    const buttons = Array.isArray(message.buttons) ? message.buttons : [];
+    const hint = buttonHint(buttons);
+    const text = [bodyText, hint].filter(Boolean).join("\n");
+    const imageUrl = extractMediaUrl(media);
+    const conversationId =
+      typeof b.conversationId === "string" ? b.conversationId : null;
+
+    return {
+      phoneNumber,
+      text,
+      imageUrl,
+      replyCallback: null,
+      conversationId,
+      event,
+      ignore: false,
+    };
+  }
+
+  // BYOA shape
+  const phoneNumber = normalizePhone(String(b.phone_number ?? "").trim());
+  if (!phoneNumber) {
+    return { error: "phone_number required" };
+  }
+
+  return {
+    phoneNumber,
+    text: typeof b.message === "string" ? b.message.trim() : "",
+    imageUrl: typeof b.image === "string" ? b.image : null,
+    replyCallback:
+      typeof b.reply_callback === "string" ? b.reply_callback.trim() || null : null,
+    conversationId:
+      typeof b.conversation_id === "string" ? b.conversation_id : null,
+    event: null,
+    ignore: false,
+  };
 }
 
 export type WassistConversation = {
@@ -177,6 +341,14 @@ export function verifyWassistSignature(
     .digest("hex");
 
   try {
+    // Docs compare hex-decoded digests; also accept raw hex string equality.
+    if (/^[0-9a-f]+$/i.test(signature) && signature.length === expected.length) {
+      const a = Buffer.from(expected, "hex");
+      const b = Buffer.from(signature, "hex");
+      if (a.length === b.length && a.length > 0) {
+        return timingSafeEqual(a, b);
+      }
+    }
     const a = Buffer.from(expected, "utf8");
     const b = Buffer.from(signature, "utf8");
     if (a.length !== b.length) return false;
