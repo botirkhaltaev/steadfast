@@ -13,6 +13,7 @@ import {
   rememberInboundMessage,
   updatePatient,
 } from "#lib/store";
+import { transcribeAudioUrl } from "#lib/transcribe";
 import {
   authenticateWebhook,
   parseWebhookBody,
@@ -67,12 +68,30 @@ function buildUserContent(input: {
   conversationId: string;
   text: string;
   imageUrl: string | null;
+  audioUrl: string | null;
+  transcript: string | null;
 }) {
+  const spoken =
+    input.transcript?.trim() ||
+    input.text.trim() ||
+    (input.imageUrl
+      ? "I sent a photo of my meal."
+      : input.audioUrl
+        ? "I sent a voice note."
+        : "Hi");
+
+  // When we have both a caption and a transcript, keep both.
+  const body =
+    input.transcript?.trim() && input.text.trim()
+      ? `${input.text.trim()}\n${input.transcript.trim()}`
+      : spoken;
+
   const preface = [
     `[patient_phone=${input.phoneNumber}]`,
     `[conversation_id=${input.conversationId}]`,
     input.imageUrl ? `[meal_image_url=${input.imageUrl}]` : null,
-    input.text || (input.imageUrl ? "I sent a photo of my meal." : "Hi"),
+    input.audioUrl ? `[voice_note_url=${input.audioUrl}]` : null,
+    body,
   ]
     .filter(Boolean)
     .join("\n");
@@ -198,25 +217,43 @@ export default defineChannel<ChannelState, Ctx, Target>({
 
       // Ack within Wassist's window; coach reply is sent from turn.completed.
       waitUntil(
-        send(buildUserContent(inbound), {
-          auth: {
-            authenticator: "wassist",
-            principalType: "user",
-            principalId: inbound.phoneNumber,
-            attributes: {
+        (async () => {
+          // Voice notes: STT first so Scout sees text. On failure we still
+          // start a turn with "I sent a voice note." so the patient isn't dropped.
+          const transcript = inbound.audioUrl
+            ? await transcribeAudioUrl(inbound.audioUrl)
+            : null;
+
+          await send(
+            buildUserContent({
               phoneNumber: inbound.phoneNumber,
               conversationId: inbound.conversationId,
-              messageId: inbound.messageId,
+              text: inbound.text,
+              imageUrl: inbound.imageUrl,
+              audioUrl: inbound.audioUrl,
+              transcript,
+            }),
+            {
+              auth: {
+                authenticator: "wassist",
+                principalType: "user",
+                principalId: inbound.phoneNumber,
+                attributes: {
+                  phoneNumber: inbound.phoneNumber,
+                  conversationId: inbound.conversationId,
+                  messageId: inbound.messageId,
+                },
+              },
+              continuationToken: patientContinuationToken(inbound.phoneNumber),
+              state: initialState(
+                inbound.phoneNumber,
+                inbound.conversationId,
+                inbound.messageId,
+              ),
+              title: `WhatsApp ${inbound.phoneNumber}`,
             },
-          },
-          continuationToken: patientContinuationToken(inbound.phoneNumber),
-          state: initialState(
-            inbound.phoneNumber,
-            inbound.conversationId,
-            inbound.messageId,
-          ),
-          title: `WhatsApp ${inbound.phoneNumber}`,
-        }).then(() => undefined),
+          );
+        })(),
       );
 
       return Response.json({ ok: true });
