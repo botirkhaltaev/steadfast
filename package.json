@@ -1,7 +1,7 @@
 {
-  "name": "steadfast",
+  "name": "scout-and-sage",
   "version": "0.1.0",
-  "description": "WhatsApp GLP-1 persistence companion (Wassist webhooks + Vercel Eve)",
+  "description": "Scout & Sage — WhatsApp GLP-1 dual AI companion + clinician (Wassist webhooks + Vercel Eve)",
   "type": "module",
   "imports": {
     "#*": "./agent/*",

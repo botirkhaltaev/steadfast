@@ -3,7 +3,7 @@ import { normalizePhone } from "#lib/phone";
 
 export type DropoutRisk = "low" | "medium" | "high";
 export type OnboardingStatus = "not_started" | "in_progress" | "complete";
-/** How often Steadfast proactively messages the patient. */
+/** How often Scout proactively messages the patient. */
 export type CheckInFrequency = "daily" | "every_few_days" | "weekly";
 
 const CHECK_IN_INTERVAL_DAYS: Record<CheckInFrequency, number> = {
@@ -22,6 +22,7 @@ export type CheckIn = {
   resistanceSessions?: number;
 };
 
+/** Future human-clinician handoff card. Kept for deferred escalation path. */
 export type EscalationCard = {
   id: string;
   phoneNumber: string;
@@ -36,6 +37,28 @@ export type EscalationCard = {
   status: "open" | "notified";
   createdAt: string;
   updatedAt: string;
+};
+
+/** AI clinician (Sage) brief persisted for Scout coordination. */
+export type SageBrief = {
+  id: string;
+  phoneNumber: string;
+  reason:
+    | "red_flag"
+    | "dropout_risk"
+    | "side_effect"
+    | "adherence"
+    | "checkin_review"
+    | "other";
+  urgency: "routine" | "urgent" | "emergency";
+  riskRead: DropoutRisk;
+  /** Guidance for Scout's next coaching moves (not shown verbatim to patient). */
+  coachingGuidance: string;
+  /** Short points Scout may paraphrase to the patient. */
+  patientSafeMessagePoints: string[];
+  /** One-line clinical-style summary for the durable record. */
+  summary: string;
+  createdAt: string;
 };
 
 export type Patient = {
@@ -53,6 +76,7 @@ export type Patient = {
   checkins: CheckIn[];
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
+  sageBriefs: SageBrief[];
   conversationId?: string;
   /** ISO timestamp of last agent-initiated check-in. */
   lastProactiveCheckInAt?: string;
@@ -83,6 +107,7 @@ function blankPatient(phoneNumber = ""): Patient {
     checkins: [],
     dropoutRisk: "low",
     escalations: [],
+    sageBriefs: [],
     createdAt: ts,
     updatedAt: ts,
   };
@@ -92,7 +117,7 @@ function blankPatient(phoneNumber = ""): Patient {
  * Durable per-WhatsApp-session patient record (Eve workflow state).
  * Sessions are keyed by phone via the Wassist channel continuation token.
  */
-export const patientState = defineState("steadfast.patient", () => blankPatient());
+export const patientState = defineState("scout_sage.patient", () => blankPatient());
 
 export function getPatient(phoneNumber: string): Patient {
   const phone = normalizePhone(phoneNumber);
@@ -120,7 +145,14 @@ export function getPatient(phoneNumber: string): Patient {
     patientState.update((p) => ({ ...p, phoneNumber: phone, updatedAt: now() }));
   }
 
-  return patientState.get();
+  // Backfill sageBriefs for any older in-memory shapes.
+  const patient = patientState.get();
+  if (!patient.sageBriefs) {
+    patientState.update((p) => ({ ...p, sageBriefs: [], updatedAt: now() }));
+    return patientState.get();
+  }
+
+  return patient;
 }
 
 export function updatePatient(phoneNumber: string, patch: Partial<Patient>): Patient {
@@ -143,6 +175,25 @@ export function addCheckIn(phoneNumber: string, checkin: CheckIn): Patient {
     updatedAt: now(),
   }));
   return patientState.get();
+}
+
+export function saveSageBrief(
+  input: Omit<SageBrief, "id" | "createdAt">,
+): SageBrief {
+  const ts = now();
+  const brief: SageBrief = {
+    ...input,
+    phoneNumber: normalizePhone(input.phoneNumber),
+    id: crypto.randomUUID(),
+    createdAt: ts,
+  };
+  getPatient(brief.phoneNumber);
+  patientState.update((p) => ({
+    ...p,
+    sageBriefs: [...(p.sageBriefs ?? []), brief].slice(-20),
+    updatedAt: ts,
+  }));
+  return brief;
 }
 
 export function createEscalation(

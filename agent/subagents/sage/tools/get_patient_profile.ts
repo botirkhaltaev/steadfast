@@ -4,25 +4,16 @@ import {
   getPatient,
   isProactiveCheckInDue,
   missingOnboardingFields,
-  updatePatient,
 } from "#lib/store";
 
 export default defineTool({
   description:
-    "Load the patient's profile and onboarding status. Call at the start of every turn before coaching or onboarding.",
+    "Load the patient's profile, recent check-ins, dropout risk, and prior Sage briefs. Call before writing a clinical brief.",
   inputSchema: z.object({
     phoneNumber: z.string().describe("WhatsApp phone in E.164 form"),
-    conversationId: z
-      .string()
-      .optional()
-      .describe("Wassist conversation id if present in the user message"),
   }),
-  async execute({ phoneNumber, conversationId }) {
-    const existing = getPatient(phoneNumber);
-    const p =
-      conversationId && existing.conversationId !== conversationId
-        ? updatePatient(phoneNumber, { conversationId })
-        : existing;
+  async execute({ phoneNumber }) {
+    const p = getPatient(phoneNumber);
     const missing = missingOnboardingFields(p);
     return {
       phoneNumber: p.phoneNumber,
@@ -37,15 +28,12 @@ export default defineTool({
       proteinTargetG: p.proteinTargetG,
       checkInFrequency: p.checkInFrequency,
       proactiveCheckInDue: isProactiveCheckInDue(p),
-      lastProactiveCheckInAt: p.lastProactiveCheckInAt ?? null,
       motivation: p.motivation,
       sideEffectHistory: p.sideEffectHistory,
       dropoutRisk: p.dropoutRisk,
-      conversationId: p.conversationId ?? null,
-      recentCheckins: p.checkins.slice(-3),
+      recentCheckins: p.checkins.slice(-5),
       recentSageBriefs: (p.sageBriefs ?? []).slice(-3),
       openEscalations: p.escalations.filter((e) => e.status === "open").length,
     };
   },
 });
-

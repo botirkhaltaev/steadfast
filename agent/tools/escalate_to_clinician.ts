@@ -7,9 +7,14 @@ import {
   markEscalationNotified,
 } from "#lib/store";
 
+/**
+ * DEFERRED — human clinician handoff is not live.
+ * Scout must consult the sage subagent for red flags / clinical review instead.
+ * Kept for a future human escalation path.
+ */
 export default defineTool({
   description:
-    "Escalate a red-flag symptom to the human clinical team. Notifies the clinician webhook when configured, and stores a durable escalation card. Call immediately on severe abdominal pain, persistent vomiting, chest pain, allergic reaction, self-harm ideation, or similar.",
+    "DEFERRED — do not use. Human clinician handoff is not implemented yet. For red flags and clinical review, consult the sage subagent instead.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     redFlag: z.string(),
@@ -49,12 +54,14 @@ export default defineTool({
 
     return {
       escalated: true,
+      deferred: true,
+      note: "Human handoff is deferred — prefer sage subagent for live clinical path.",
       escalationId: card.id,
       clinicianNotified: notifyResult.notified,
       notifyChannel: notifyResult.channel,
       notifyDetail: notifyResult.detail,
       messageForPatient:
-        "I'm not able to assess this, and it sounds important — I'm connecting you with the clinical team right now.",
+        "I'm not able to assess this safely on my own — please seek emergency care if you feel unsafe, and I'll take guidance from Sage on next steps.",
     };
   },
 });
