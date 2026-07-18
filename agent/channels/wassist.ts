@@ -1,0 +1,312 @@
+import { defineChannel, GET, POST } from "eve/channels";
+import { toolResultFrom } from "eve/tools";
+import { normalizePhone } from "#lib/phone";
+import { rememberInboundMessage } from "#lib/store";
+import {
+  authenticateWebhook,
+  parseWebhookBody,
+  sendMessage,
+  type QuickReplyButton,
+} from "#lib/wassist";
+import offerChoices from "../tools/offer_choices";
+import generateMealVisual from "../tools/generate_meal_visual";
+
+type ChannelState = {
+  phoneNumber: string | null;
+  conversationId: string | null;
+  messageId: string | null;
+  /** True when this WhatsApp message was already handled in a prior turn. */
+  duplicate: boolean;
+  pendingButtons: QuickReplyButton[] | null;
+  pendingImageUrl: string | null;
+  pendingTexts: string[];
+  sent: boolean;
+};
+
+type Target = { phoneNumber: string };
+type Ctx = { state: ChannelState };
+
+function tokenFor(phoneNumber: string) {
+  return normalizePhone(phoneNumber);
+}
+
+function initialState(
+  phoneNumber: string | null = null,
+  conversationId: string | null = null,
+  messageId: string | null = null,
+): ChannelState {
+  return {
+    phoneNumber,
+    conversationId,
+    messageId,
+    duplicate: false,
+    pendingButtons: null,
+    pendingImageUrl: null,
+    pendingTexts: [],
+    sent: false,
+  };
+}
+
+function hasModelCredentials(): boolean {
+  return Boolean(
+    process.env.AI_GATEWAY_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.VERCEL,
+  );
+}
+
+function buildUserContent(input: {
+  phoneNumber: string;
+  conversationId: string;
+  text: string;
+  imageUrl: string | null;
+}) {
+  const preface = [
+    `[patient_phone=${input.phoneNumber}]`,
+    `[conversation_id=${input.conversationId}]`,
+    input.imageUrl ? `[meal_image_url=${input.imageUrl}]` : null,
+    input.text || (input.imageUrl ? "I sent a photo of my meal." : "Hi"),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  if (!input.imageUrl) return preface;
+
+  return [
+    { type: "text" as const, text: preface },
+    {
+      type: "file" as const,
+      data: new URL(input.imageUrl),
+      mediaType: "image/jpeg",
+    },
+  ];
+}
+
+async function flush(channel: { state: ChannelState }, fallbackText?: string) {
+  const { state } = channel;
+  if (state.duplicate || state.sent) return;
+
+  const conversationId = state.conversationId;
+  if (!conversationId) {
+    console.warn("[wassist] missing conversationId; drop outbound", {
+      phoneNumber: state.phoneNumber,
+    });
+    return;
+  }
+
+  const content =
+    state.pendingTexts
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .join("\n\n") || fallbackText;
+
+  if (!content) return;
+
+  const buttons = state.pendingButtons;
+  const imageUrl = state.pendingImageUrl;
+  state.pendingButtons = null;
+  state.pendingImageUrl = null;
+  state.pendingTexts = [];
+  state.sent = true;
+
+  await sendMessage(conversationId, {
+    content,
+    ...(buttons?.length ? { buttons } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
+  });
+}
+
+export default defineChannel<ChannelState, Ctx, Target>({
+  cors: false,
+  state: initialState(),
+
+  context(state) {
+    return { state };
+  },
+
+  metadata(state) {
+    return {
+      phoneNumber: state.phoneNumber,
+      conversationId: state.conversationId,
+    };
+  },
+
+  async receive(input, { send }) {
+    const phoneNumber = normalizePhone(input.target.phoneNumber);
+    return send(input.message, {
+      auth: input.auth,
+      continuationToken: tokenFor(phoneNumber),
+      state: initialState(phoneNumber),
+      title: `WhatsApp ${phoneNumber}`,
+    });
+  },
+
+  routes: [
+    /**
+     * Wassist platform webhook.
+     * Mounted at POST /webhook (Eve custom channels keep authored paths).
+     */
+    POST("/webhook", async (req, { send, waitUntil }) => {
+      const rawBody = await req.text().catch(() => null);
+      if (rawBody == null) {
+        return Response.json({ error: "invalid body" }, { status: 400 });
+      }
+
+      if (!authenticateWebhook(req, rawBody)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      const json = (() => {
+        try {
+          return { ok: true as const, value: JSON.parse(rawBody) as unknown };
+        } catch {
+          return { ok: false as const };
+        }
+      })();
+      if (!json.ok) {
+        return Response.json({ error: "invalid json" }, { status: 400 });
+      }
+
+      const parsed = parseWebhookBody(json.value);
+      if (parsed.kind === "error") {
+        return Response.json({ error: parsed.error }, { status: 400 });
+      }
+      if (parsed.kind === "ignored") {
+        return Response.json({ ok: true, ignored: parsed.event });
+      }
+
+      const inbound = parsed.message;
+
+      if (!hasModelCredentials()) {
+        waitUntil(
+          sendMessage(inbound.conversationId, {
+            content:
+              "Steadfast isn't fully configured yet. Please try again shortly.",
+          }).catch((err) => {
+            console.error("[wassist] config notice failed", err);
+          }),
+        );
+        return Response.json({ ok: true });
+      }
+
+      // Ack within Wassist's window; coach reply is sent from turn.completed.
+      waitUntil(
+        send(buildUserContent(inbound), {
+          auth: {
+            authenticator: "wassist",
+            principalType: "user",
+            principalId: inbound.phoneNumber,
+            attributes: {
+              phoneNumber: inbound.phoneNumber,
+              conversationId: inbound.conversationId,
+              messageId: inbound.messageId,
+            },
+          },
+          continuationToken: tokenFor(inbound.phoneNumber),
+          state: initialState(
+            inbound.phoneNumber,
+            inbound.conversationId,
+            inbound.messageId,
+          ),
+          title: `WhatsApp ${inbound.phoneNumber}`,
+        }).then(() => undefined),
+      );
+
+      return Response.json({ ok: true });
+    }),
+
+    GET("/health", async () =>
+      Response.json({
+        ok: true,
+        service: "steadfast-wassist",
+        webhook: "/webhook",
+        authConfigured: Boolean(process.env.WASSIST_WEBHOOK_SECRET),
+        modelConfigured: hasModelCredentials(),
+      }),
+    ),
+  ],
+
+  events: {
+    "turn.started"(_eventData, channel) {
+      channel.state.pendingTexts = [];
+      channel.state.pendingButtons = null;
+      channel.state.pendingImageUrl = null;
+      channel.state.sent = false;
+      channel.state.duplicate = false;
+
+      const { phoneNumber, messageId } = channel.state;
+      if (phoneNumber && messageId) {
+        // Same WhatsApp message must not run two coach turns.
+        channel.state.duplicate = !rememberInboundMessage(phoneNumber, messageId);
+        if (channel.state.duplicate) {
+          console.info("[wassist] duplicate message skipped", {
+            phoneNumber,
+            messageId,
+          });
+        }
+      }
+    },
+
+    "action.result"(eventData, channel) {
+      if (channel.state.duplicate) return;
+
+      const choices = toolResultFrom(eventData.result, offerChoices);
+      if (choices?.output?.buttons?.length) {
+        channel.state.pendingButtons = choices.output.buttons;
+      }
+
+      const meal = toolResultFrom(eventData.result, generateMealVisual);
+      if (meal?.output?.imageUrl) {
+        channel.state.pendingImageUrl = meal.output.imageUrl;
+      }
+    },
+
+    "message.completed"(eventData, channel) {
+      if (channel.state.duplicate) return;
+      if (eventData.finishReason === "tool-calls") return;
+
+      const text =
+        typeof eventData.message === "string"
+          ? eventData.message.trim()
+          : "";
+      if (!text) return;
+      channel.state.pendingTexts = [...channel.state.pendingTexts, text];
+    },
+
+    async "turn.completed"(_eventData, channel) {
+      try {
+        await flush(channel);
+      } catch (err) {
+        console.error("[wassist] turn.completed send failed", err);
+      }
+    },
+
+    async "turn.failed"(eventData, channel) {
+      if (channel.state.duplicate) return;
+      const detail =
+        typeof eventData.message === "string"
+          ? eventData.message
+          : "something went wrong on my side";
+      channel.state.pendingTexts = [
+        `Sorry — ${detail}. Please try again in a moment. If you feel unwell, contact your clinician or emergency services.`,
+      ];
+      try {
+        await flush(channel);
+      } catch (err) {
+        console.error("[wassist] turn.failed send failed", err);
+      }
+    },
+
+    async "session.failed"(_eventData, channel) {
+      if (channel.state.duplicate) return;
+      channel.state.pendingTexts = [
+        "Sorry — I'm having trouble right now. Please try again shortly. If this is urgent, contact your clinician or emergency services.",
+      ];
+      try {
+        await flush(channel);
+      } catch (err) {
+        console.error("[wassist] session.failed send failed", err);
+      }
+    },
+  },
+});
