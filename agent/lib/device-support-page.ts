@@ -86,6 +86,22 @@ export function renderDeviceSupportPage(): string {
       opacity: 0.9;
       margin-bottom: 0.35rem;
     }
+    #status.speaking::before {
+      content: "";
+      display: inline-block;
+      width: 0.55rem; height: 0.55rem;
+      margin-right: 0.4rem;
+      border-radius: 50%;
+      background: #6ee7b7;
+      box-shadow: 0 0 0 0 rgba(110, 231, 183, 0.7);
+      animation: pulse 1.2s ease-out infinite;
+      vertical-align: middle;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(110, 231, 183, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(110, 231, 183, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(110, 231, 183, 0); }
+    }
     #captions {
       font-size: 1.05rem;
       line-height: 1.35;
@@ -256,14 +272,16 @@ export function renderDeviceSupportPage(): string {
   let model = "";
   let captionBuffer = "";
   let lastOutcomeTag = null;
+  let inputSampleRate = 16000;
 
   function showError(msg) {
     errorEl.textContent = msg;
     errorEl.classList.remove("hidden");
   }
 
-  function setStatus(msg) {
+  function setStatus(msg, opts) {
     statusEl.textContent = msg;
+    statusEl.classList.toggle("speaking", !!(opts && opts.speaking));
   }
 
   function setCaptions(msg) {
@@ -391,17 +409,41 @@ export function renderDeviceSupportPage(): string {
 
   function connectLive(ephemeralToken, modelName) {
     return new Promise((resolve, reject) => {
+      // Do NOT encodeURIComponent the token: Google's gateway requires a literal
+      // slash in auth_tokens/<id>. Encoding it as %2F breaks the handshake so
+      // setupComplete never arrives (camera preview still works locally).
       const url =
         "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=" +
-        encodeURIComponent(ephemeralToken);
+        ephemeralToken;
 
       ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
 
+      let settled = false;
+      const fail = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(openTimer);
+        clearTimeout(setupTimer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(openTimer);
+        clearTimeout(setupTimer);
+        resolve();
+      };
+
       const openTimer = setTimeout(() => {
-        reject(new Error("Timed out connecting to the live helper."));
+        fail(new Error("Timed out connecting to the live helper."));
         try { ws.close(); } catch (_) {}
       }, 15000);
+
+      const setupTimer = setTimeout(() => {
+        fail(new Error("Live helper connected but never became ready. Try a fresh link."));
+        try { ws.close(); } catch (_) {}
+      }, 20000);
 
       ws.onopen = () => {
         clearTimeout(openTimer);
@@ -428,15 +470,21 @@ export function renderDeviceSupportPage(): string {
         if (msg.setupComplete) {
           setupComplete = true;
           setStatus("Live — speak naturally, show the device on camera");
-          startAudioPipeline();
-          startVideoPipeline();
-          // Nudge the model to greet and begin.
-          ws.send(JSON.stringify({
-            realtimeInput: {
-              text: "Please greet me briefly and help me use my Tasso+ blood collection device. Ask me to show the kit on camera.",
-            },
-          }));
-          resolve();
+          startAudioPipeline().then(() => {
+            // Nudge the model to greet and begin (Gemini 3.1: realtimeInput for live text).
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                realtimeInput: {
+                  text: "Please greet me briefly and help me use my Tasso+ blood collection device. Ask me to show the kit on camera.",
+                },
+              }));
+            }
+            startVideoPipeline();
+            succeed();
+          }).catch((err) => {
+            console.error("audio pipeline failed", err);
+            fail(err);
+          });
           return;
         }
 
@@ -450,11 +498,15 @@ export function renderDeviceSupportPage(): string {
       };
 
       ws.onerror = () => {
-        clearTimeout(openTimer);
-        if (!setupComplete) reject(new Error("Live connection failed. Check your network and try a fresh link."));
+        if (!setupComplete) fail(new Error("Live connection failed. Check your network and try a fresh link."));
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
+        if (!ending && !setupComplete) {
+          const reason = (ev && ev.reason) ? ev.reason : ("code " + (ev && ev.code));
+          fail(new Error("Live connection closed before ready (" + reason + "). Try a fresh link."));
+          return;
+        }
         if (!ending && setupComplete) {
           endSession(lastOutcomeTag || "abandoned");
         }
@@ -465,12 +517,14 @@ export function renderDeviceSupportPage(): string {
   function handleServerContent(content) {
     if (content.interrupted) {
       stopPlayback();
+      setStatus("Live — speak naturally, show the device on camera");
     }
 
     const parts = content.modelTurn && content.modelTurn.parts ? content.modelTurn.parts : [];
     for (const part of parts) {
       if (part.inlineData && part.inlineData.data) {
         const mime = part.inlineData.mimeType || "audio/pcm;rate=24000";
+        setStatus("Helper speaking…", { speaking: true });
         playPcmChunk(part.inlineData.data, mime);
       }
       if (part.text) {
@@ -484,9 +538,11 @@ export function renderDeviceSupportPage(): string {
       captionBuffer += content.outputTranscription.text;
       setCaptions(captionBuffer.trim());
       detectOutcome(captionBuffer);
+      setStatus("Helper speaking…", { speaking: true });
     }
 
     if (content.turnComplete) {
+      setStatus("Live — speak naturally, show the device on camera");
       // Keep a rolling caption window
       if (captionBuffer.length > 500) {
         captionBuffer = captionBuffer.slice(-400);
@@ -499,20 +555,32 @@ export function renderDeviceSupportPage(): string {
     if (m) lastOutcomeTag = m[1].toLowerCase();
   }
 
-  function startAudioPipeline() {
+  async function startAudioPipeline() {
     if (!mediaStream) return;
+    // Prefer 16 kHz, but browsers often ignore the hint and stay at 48 kHz.
+    // Always label outgoing PCM with the context's actual rate (or downsample).
     audioContext = new AudioContext({ sampleRate: 16000 });
+    if (audioContext.state === "suspended") await audioContext.resume();
     playbackCtx = playbackCtx || new AudioContext({ sampleRate: 24000 });
+    if (playbackCtx.state === "suspended") await playbackCtx.resume();
+
+    inputSampleRate = audioContext.sampleRate || 16000;
     sourceNode = audioContext.createMediaStreamSource(mediaStream);
 
-    // ScriptProcessor is deprecated but widely available without worklet bundling.
+    // ScriptProcessor is deprecated but available without worklet bundling.
     const bufferSize = 4096;
     processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
     processor.onaudioprocess = (event) => {
+      // Mute processor output — connecting to destination without this plays
+      // the mic through the speaker, which barge-in-interrupts the model forever.
+      const output = event.outputBuffer.getChannelData(0);
+      output.fill(0);
+
       if (!ws || ws.readyState !== WebSocket.OPEN || !setupComplete || muted || ending) return;
       const input = event.inputBuffer.getChannelData(0);
-      const pcm = floatTo16BitPCM(input);
-      const b64 = arrayBufferToBase64(pcm.buffer);
+      const pcm = downsampleTo16k(input, inputSampleRate);
+      if (!pcm || pcm.length === 0) return;
+      const b64 = int16ToBase64(pcm);
       ws.send(JSON.stringify({
         realtimeInput: {
           audio: {
@@ -523,8 +591,7 @@ export function renderDeviceSupportPage(): string {
       }));
     };
     sourceNode.connect(processor);
-    processor.connect(audioContext.destination);
-    // Keep the graph alive but silent for the processor path
+    // Keep the graph alive but silent (required for ScriptProcessor to fire).
     const gain = audioContext.createGain();
     gain.gain.value = 0;
     processor.connect(gain);
@@ -559,6 +626,25 @@ export function renderDeviceSupportPage(): string {
     }, 1000);
   }
 
+  /** Linear-resample float32 PCM to 16 kHz Int16 when the AudioContext isn't 16 kHz. */
+  function downsampleTo16k(float32, fromRate) {
+    const target = 16000;
+    if (!fromRate || fromRate === target) {
+      return floatTo16BitPCM(float32);
+    }
+    const ratio = fromRate / target;
+    const newLen = Math.max(1, Math.floor(float32.length / ratio));
+    const down = new Float32Array(newLen);
+    for (let i = 0; i < newLen; i++) {
+      const idx = i * ratio;
+      const i0 = Math.floor(idx);
+      const i1 = Math.min(i0 + 1, float32.length - 1);
+      const frac = idx - i0;
+      down[i] = float32[i0] * (1 - frac) + float32[i1] * frac;
+    }
+    return floatTo16BitPCM(down);
+  }
+
   function floatTo16BitPCM(float32) {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
@@ -568,8 +654,13 @@ export function renderDeviceSupportPage(): string {
     return out;
   }
 
+  function int16ToBase64(int16) {
+    // Use the Int16 view's exact byte range — .buffer alone can include padding.
+    return arrayBufferToBase64(int16.buffer.slice(int16.byteOffset, int16.byteOffset + int16.byteLength));
+  }
+
   function arrayBufferToBase64(buffer) {
-    const bytes = new Uint8Array(buffer);
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
     let binary = "";
     const chunk = 0x8000;
     for (let i = 0; i < bytes.length; i += chunk) {
@@ -617,18 +708,13 @@ export function renderDeviceSupportPage(): string {
     ending = true;
     setStatus("Ending session…");
 
-    // Ask model for a final tagged summary if still connected
+    // Ask model for a final tagged summary if still connected.
+    // Gemini 3.1: use realtimeInput for mid-session text (clientContent is history-only).
     if (ws && ws.readyState === WebSocket.OPEN && setupComplete) {
       try {
         ws.send(JSON.stringify({
-          clientContent: {
-            turns: [{
-              role: "user",
-              parts: [{
-                text: "Please wrap up in one short sentence for Scout, ending with OUTCOME:completed or OUTCOME:abandoned or OUTCOME:escalate.",
-              }],
-            }],
-            turnComplete: true,
+          realtimeInput: {
+            text: "Please wrap up in one short sentence for Scout, ending with OUTCOME:completed or OUTCOME:abandoned or OUTCOME:escalate.",
           },
         }));
         await wait(1200);

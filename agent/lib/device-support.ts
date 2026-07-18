@@ -334,10 +334,17 @@ export async function mintGeminiEphemeralToken(opts: {
           responseModalities: [Modality.AUDIO],
           systemInstruction,
           outputAudioTranscription: {},
+          // A/V sessions hit a ~2 min wall without compression.
+          contextWindowCompression: {
+            triggerTokens: "10000",
+            slidingWindow: { targetTokens: "8000" },
+          },
           sessionResumption: {},
           temperature: 0.7,
         },
       },
+      // Only lock fields we set; leave the rest unlocked for client session setup.
+      lockAdditionalFields: [],
       httpOptions: { apiVersion: "v1alpha" },
     },
   });
