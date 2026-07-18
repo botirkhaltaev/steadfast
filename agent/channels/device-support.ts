@@ -1,0 +1,166 @@
+import { defineChannel, GET, POST } from "eve/channels";
+import type { SessionAuthContext } from "eve/context";
+import wassist from "./wassist";
+import {
+  buildDeviceSupportOutcomeMessage,
+  markLinkOutcome,
+  markLinkStarted,
+  mintGeminiEphemeralToken,
+  verifyLinkToken,
+  type DeviceSupportOutcome,
+} from "#lib/device-support";
+import { renderDeviceSupportPage } from "#lib/device-support-page";
+import { waitForTurnSettlement } from "#lib/session-wait";
+
+type ChannelState = Record<string, never>;
+
+const OUTCOMES = new Set<DeviceSupportOutcome>([
+  "completed",
+  "abandoned",
+  "escalate",
+]);
+
+function jsonError(error: string, status: number, message?: string) {
+  return Response.json(
+    { error, ...(message ? { message } : {}) },
+    { status },
+  );
+}
+
+export default defineChannel<ChannelState>({
+  cors: false,
+  state: {},
+
+  routes: [
+    /**
+     * Patient-facing Tasso+ Gemini Live helper page.
+     * Query: ?t=<signed link token from Scout>
+     */
+    GET("/device-support", async () => {
+      return new Response(renderDeviceSupportPage(), {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        },
+      });
+    }),
+
+    /**
+     * Validate the one-time link and mint a Gemini Live ephemeral token.
+     * Body: { t: string }
+     */
+    POST("/device-support/api/live-token", async (req) => {
+      let body: { t?: string };
+      try {
+        body = (await req.json()) as { t?: string };
+      } catch {
+        return jsonError("invalid_json", 400);
+      }
+
+      const raw = typeof body.t === "string" ? body.t : "";
+      const verified = verifyLinkToken(raw);
+      if (!verified.ok) {
+        return jsonError(verified.error, verified.status);
+      }
+
+      const started = markLinkStarted(verified.claims.sid);
+      if (!started.ok) {
+        return jsonError(started.error, started.status);
+      }
+
+      try {
+        const { token, model } = await mintGeminiEphemeralToken({
+          patientName: verified.claims.name,
+          reason: verified.claims.reason,
+        });
+        return Response.json({
+          token,
+          model,
+          patientName: verified.claims.name,
+        });
+      } catch (err) {
+        // Allow retry with the same link if Gemini mint fails.
+        const entry = verified.entry;
+        entry.status = "link_sent";
+        const message =
+          err instanceof Error ? err.message : "Failed to mint live token";
+        console.error("[device-support] live-token mint failed", err);
+        return jsonError("mint_failed", 502, message);
+      }
+    }),
+
+    /**
+     * Browser reports session outcome; resume WhatsApp Scout session.
+     * Body: { t, outcome, summary? }
+     */
+    POST("/device-support/api/outcome", async (req, { receive, waitUntil }) => {
+      let body: {
+        t?: string;
+        outcome?: string;
+        summary?: string | null;
+      };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return jsonError("invalid_json", 400);
+      }
+
+      const raw = typeof body.t === "string" ? body.t : "";
+      const verified = verifyLinkToken(raw);
+      if (!verified.ok) {
+        return jsonError(verified.error, verified.status);
+      }
+
+      const outcomeRaw = String(body.outcome ?? "").toLowerCase();
+      if (!OUTCOMES.has(outcomeRaw as DeviceSupportOutcome)) {
+        return jsonError("invalid_outcome", 400);
+      }
+      const outcome = outcomeRaw as DeviceSupportOutcome;
+      const summary =
+        typeof body.summary === "string" ? body.summary.slice(0, 800) : null;
+
+      const marked = markLinkOutcome(verified.claims.sid, outcome, summary);
+      if (!marked.ok) {
+        return jsonError(marked.error, marked.status);
+      }
+
+      const auth: SessionAuthContext = {
+        authenticator: "device-support",
+        principalType: "runtime",
+        principalId: "eve:device-support",
+        attributes: {
+          phoneNumber: verified.claims.phone,
+          conversationId: verified.claims.conversationId,
+          sessionId: verified.claims.sid,
+          outcome,
+        },
+      };
+
+      waitUntil(
+        (async () => {
+          const session = await receive(wassist, {
+            message: buildDeviceSupportOutcomeMessage({
+              phoneNumber: verified.claims.phone,
+              conversationId: verified.claims.conversationId,
+              sessionId: verified.claims.sid,
+              outcome,
+              summary,
+              reason: verified.claims.reason,
+            }),
+            target: { phoneNumber: verified.claims.phone },
+            auth,
+          });
+          await waitForTurnSettlement(session);
+        })().catch((err) => {
+          console.error("[device-support] outcome resume failed", err);
+        }),
+      );
+
+      return Response.json({
+        ok: true,
+        sessionId: verified.claims.sid,
+        outcome,
+      });
+    }),
+  ],
+});

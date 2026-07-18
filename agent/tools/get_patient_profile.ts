@@ -48,6 +48,7 @@ export default defineTool({
       emedDeviceLinked: p.emedSetupStatus === "linked",
       emedDeviceId: p.emedDevice?.deviceId ?? null,
       openEscalations: p.escalations.filter((e) => e.status === "open").length,
+      recentDeviceSupportSessions: (p.deviceSupportSessions ?? []).slice(-3),
     };
   },
 });

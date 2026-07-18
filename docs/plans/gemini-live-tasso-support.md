@@ -1,6 +1,6 @@
 # Feature Plan: Gemini Live "Tasso+ Device Helper" (voice + vision browser session)
 
-Status: **PLAN ONLY — no implementation yet**
+Status: **IMPLEMENTED** (see `agent/channels/device-support.ts`, `agent/tools/start_device_support_session.ts`, `agent/lib/device-support*.ts`)
 
 ## 1. Summary
 

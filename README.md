@@ -66,6 +66,7 @@ Coaching, meal vision, and risk scoring unlock only after onboarding completes.
 | Eve `defineState` | Patient DB incl. eMed device link + readings |
 | OpenAI via AI Gateway | Coach + meal vision |
 | Runware FLUX | Higher-protein meal visuals |
+| Gemini Live API | Tasso+ voice + vision device helper (browser link) |
 
 ## Setup
 
@@ -74,10 +75,17 @@ Requires **Node 24+**.
 ```bash
 cp .env.example .env
 # AI_GATEWAY_API_KEY, WASSIST_API_KEY, WASSIST_WEBHOOK_SECRET, RUNWARE_API_KEY
+# GEMINI_API_KEY, PUBLIC_BASE_URL, DEVICE_SUPPORT_LINK_SECRET (Tasso+ live helper)
 
 npm install
 npm run dev
 ```
+
+### Tasso+ live device helper (Gemini Live)
+
+When a patient struggles with their Tasso+ blood kit, Scout calls `start_device_support_session` and sends a one-time browser link (`/device-support?t=…`). The page requests camera + mic, mints a short-lived Gemini Live ephemeral token from this app, and runs a voice + vision troubleshooting session grounded in the Tasso+ Instructions For Use. On end, the outcome resumes the WhatsApp thread so Scout can follow up.
+
+Requires `GEMINI_API_KEY`, `PUBLIC_BASE_URL` (your deploy origin), and preferably `DEVICE_SUPPORT_LINK_SECRET`.
 
 ### eMed device (onboarding)
 
@@ -104,6 +112,9 @@ Env vars:
 - `WASSIST_API_KEY`
 - `WASSIST_WEBHOOK_SECRET` (required in production — HMAC `x-wassist-signature`)
 - `RUNWARE_API_KEY`
+- `GEMINI_API_KEY` (Tasso+ Gemini Live helper)
+- `PUBLIC_BASE_URL` (origin used in WhatsApp device-support links)
+- `DEVICE_SUPPORT_LINK_SECRET` (HMAC for one-time links; falls back to webhook secret)
 - `CLINICIAN_WEBHOOK_URL` (optional; **future** human escalation sink — unused by Scout/Sage today)
 
 Health: `GET /health` → `{"ok":true,"service":"scout-sage-wassist","webhook":"/webhook"}`  
@@ -117,6 +128,7 @@ Eve: `GET /eve/v1/health`
 4. If they connected eMed → Scout consults Sage → Sage pulls that user’s biomarkers  
 5. Lunch photo → protein estimate + Runware upgrade image  
 6. “Bad stomach pain” → Scout stops coaching → consults Sage → patient-safe next steps (no human handoff yet)  
+7. “My Tasso+ isn’t collecting blood” → Scout sends `/device-support` live link → patient opens camera+mic helper → Scout follows up on outcome  
 
 ## Safety
 
