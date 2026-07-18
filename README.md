@@ -2,7 +2,7 @@
 
 WhatsApp-native AI companion that keeps people on their GLP-1 programme.
 
-**UI = WhatsApp only.** Conversational onboarding, weekly check-ins, side-effect coaching, meal-photo protein support, quick-reply choices, dropout-risk awareness, and human escalation on red flags.
+**UI = WhatsApp only.** Conversational onboarding, frequency-based proactive check-ins, side-effect coaching, meal-photo protein support, quick-reply choices, dropout-risk awareness, and human escalation on red flags.
 
 Built with [Wassist](https://wassist.app) webhooks + [Vercel Eve](https://eve.dev).
 
@@ -27,7 +27,7 @@ Eve agent (Vercel)
    instructions.md   — onboarding + coach + safety
    defineState       — durable per-phone patient profile
    tools/            — onboarding, choices, check-in, vision, escalate
-   schedules/        — weekly check-in cron
+   schedules/        — daily sweep; check-ins honor chosen cadence
    │
    ▼ POST /conversations/{id}/messages/
 Wassist Conversations API → WhatsApp
@@ -40,10 +40,10 @@ One inbound path (signed platform events). One outbound path (REST). No BYOA cal
 New numbers start with an empty durable profile.
 
 1. Welcome + disclose you're not a doctor  
-2. One question at a time: name → medication → dose → week → diet → protein target  
-3. Diet / protein use WhatsApp **quick-reply buttons** (`offer_choices`)  
+2. One question at a time: name → medication → dose → week → diet → protein target → **check-in frequency**  
+3. Diet / protein / frequency use WhatsApp **quick-reply buttons** (`offer_choices`) — Daily / Every few days / Weekly  
 4. Saves via `update_onboarding` until complete  
-5. Confirms summary + explains the weekly ritual  
+5. Confirms summary + explains that **Steadfast will message them** on that cadence  
 
 Coaching, meal vision, and risk scoring unlock only after onboarding completes.
 
@@ -96,10 +96,11 @@ Eve: `GET /eve/v1/health`
 
 ## Demo (live WhatsApp)
 
-1. New chat → onboarding with quick replies → confirm profile  
-2. “Rough week, nauseous, skipped a dose” → coaching + check-in log  
-3. Lunch photo → protein estimate + Runware upgrade image  
-4. “Bad stomach pain” → stop coaching → escalate  
+1. New chat → onboarding with quick replies (incl. check-in frequency) → confirm profile  
+2. Agent-initiated check-in on their cadence (or `POST /proactive-checkin`)  
+3. “Rough week, nauseous, skipped a dose” → coaching + check-in log  
+4. Lunch photo → protein estimate + Runware upgrade image  
+5. “Bad stomach pain” → stop coaching → escalate  
 
 ## Safety
 

@@ -3,6 +3,14 @@ import { normalizePhone } from "#lib/phone";
 
 export type DropoutRisk = "low" | "medium" | "high";
 export type OnboardingStatus = "not_started" | "in_progress" | "complete";
+/** How often Steadfast proactively messages the patient. */
+export type CheckInFrequency = "daily" | "every_few_days" | "weekly";
+
+const CHECK_IN_INTERVAL_DAYS: Record<CheckInFrequency, number> = {
+  daily: 1,
+  every_few_days: 3,
+  weekly: 7,
+};
 
 export type CheckIn = {
   at: string;
@@ -39,12 +47,15 @@ export type Patient = {
   medication: string | null;
   diet: string | null;
   proteinTargetG: number | null;
+  checkInFrequency: CheckInFrequency | null;
   motivation: string | null;
   sideEffectHistory: string[];
   checkins: CheckIn[];
   dropoutRisk: DropoutRisk;
   escalations: EscalationCard[];
   conversationId?: string;
+  /** ISO timestamp of last agent-initiated check-in. */
+  lastProactiveCheckInAt?: string;
   /** WhatsApp message ids already coached on (newest last). */
   seenMessageIds?: string[];
   createdAt: string;
@@ -66,6 +77,7 @@ function blankPatient(phoneNumber = ""): Patient {
     medication: null,
     diet: null,
     proteinTargetG: null,
+    checkInFrequency: null,
     motivation: null,
     sideEffectHistory: [],
     checkins: [],
@@ -197,7 +209,30 @@ export function missingOnboardingFields(patient: Patient): string[] {
   if (patient.week == null) missing.push("week");
   if (!patient.diet) missing.push("diet");
   if (patient.proteinTargetG == null) missing.push("proteinTargetG");
+  if (!patient.checkInFrequency) missing.push("checkInFrequency");
   return missing;
+}
+
+/** Whether a proactive check-in should be sent now, based on chosen frequency. */
+export function isProactiveCheckInDue(
+  patient: Patient,
+  at: Date = new Date(),
+): boolean {
+  if (patient.onboardingStatus !== "complete") return false;
+  if (!patient.checkInFrequency || !patient.conversationId) return false;
+  if (!patient.lastProactiveCheckInAt) return true;
+
+  const lastMs = Date.parse(patient.lastProactiveCheckInAt);
+  if (!Number.isFinite(lastMs)) return true;
+
+  const elapsedDays = (at.getTime() - lastMs) / (24 * 60 * 60 * 1000);
+  return elapsedDays >= CHECK_IN_INTERVAL_DAYS[patient.checkInFrequency];
+}
+
+export function markProactiveCheckInSent(phoneNumber: string): Patient {
+  return updatePatient(phoneNumber, {
+    lastProactiveCheckInAt: now(),
+  });
 }
 
 /**

@@ -3,6 +3,8 @@
  * Keeps onboarding resilient when the model passes button ids through literally.
  */
 
+import type { CheckInFrequency } from "#lib/store";
+
 const DIET_ALIASES: Record<string, string> = {
   diet_omnivore: "omnivore",
   omnivore: "omnivore",
@@ -40,4 +42,28 @@ export function normalizeProteinTargetG(
   if (/^\d{2,3}$/.test(text)) return Number(text);
 
   return undefined;
+}
+
+const FREQUENCY_ALIASES: Record<string, CheckInFrequency> = {
+  checkin_daily: "daily",
+  daily: "daily",
+  "every day": "daily",
+  "once a day": "daily",
+  checkin_few_days: "every_few_days",
+  every_few_days: "every_few_days",
+  "every few days": "every_few_days",
+  "few days": "every_few_days",
+  checkin_weekly: "weekly",
+  weekly: "weekly",
+  "once a week": "weekly",
+  "every week": "weekly",
+};
+
+export function normalizeCheckInFrequency(
+  raw: string | undefined,
+): CheckInFrequency | undefined {
+  if (raw == null) return undefined;
+  const key = raw.trim().toLowerCase();
+  if (!key) return undefined;
+  return FREQUENCY_ALIASES[key];
 }

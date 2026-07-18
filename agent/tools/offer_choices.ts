@@ -8,7 +8,7 @@ import { getPatient } from "#lib/store";
  */
 export default defineTool({
   description:
-    "Attach up to 3 WhatsApp quick-reply buttons to your NEXT text reply. Call this in the same turn before you finish speaking when offering choices (diet type, protein band, yes/no). Do not dump long option lists in text if buttons cover them.",
+    "Attach up to 3 WhatsApp quick-reply buttons to your NEXT text reply. Call this in the same turn before you finish speaking when offering choices (diet type, protein band, check-in frequency, yes/no). Do not dump long option lists in text if buttons cover them.",
   inputSchema: z.object({
     phoneNumber: z.string(),
     choices: z
