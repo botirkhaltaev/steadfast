@@ -158,11 +158,28 @@ export function renderDeviceSupportPage(): string {
       line-height: 1.4;
     }
     footer a { color: var(--accent); }
-    #error {
+    #error, #liveError {
       color: var(--danger);
       font-weight: 600;
       margin-top: 0.75rem;
     }
+    #liveError {
+      background: #fff5f5;
+      border: 1px solid rgba(155, 44, 44, 0.25);
+      border-radius: 0.9rem;
+      padding: 0.85rem 1rem;
+      margin: 0;
+    }
+    #browserWarn {
+      background: #fff8e8;
+      border: 1px solid rgba(140, 100, 20, 0.28);
+      border-radius: 0.9rem;
+      padding: 0.85rem 1rem;
+      color: #6a4b00;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+    #browserWarn a { color: var(--accent); }
   </style>
 </head>
 <body>
@@ -172,11 +189,14 @@ export function renderDeviceSupportPage(): string {
   </header>
 
   <main>
+    <section id="browserWarn" class="hidden"></section>
+
     <section id="intro" class="panel">
       <h2>Before you start</h2>
       <ul>
         <li>Stay seated — blood collection can make some people feel faint.</li>
         <li>Allow camera and microphone when prompted so the helper can see your device.</li>
+        <li>For the most reliable camera, open this link in <strong>Safari</strong> or <strong>Chrome</strong> (not inside WhatsApp).</li>
         <li>Audio and video go to Google Gemini for this live session only. We keep a short summary for Scout on WhatsApp.</li>
       </ul>
       <p id="error" class="hidden"></p>
@@ -193,7 +213,9 @@ export function renderDeviceSupportPage(): string {
           <div id="captions">The helper will speak here in captions.</div>
         </div>
       </div>
+      <p id="liveError" class="hidden"></p>
       <div class="actions">
+        <button id="retryBtn" class="primary hidden" type="button">Retry connection</button>
         <button id="muteBtn" class="secondary" type="button">Mute mic</button>
         <button id="flipBtn" class="secondary" type="button">Flip camera</button>
         <button id="endBtn" class="danger" type="button">End session</button>
@@ -224,16 +246,28 @@ export function renderDeviceSupportPage(): string {
   const live = document.getElementById("live");
   const done = document.getElementById("done");
   const errorEl = document.getElementById("error");
+  const liveErrorEl = document.getElementById("liveError");
+  const browserWarn = document.getElementById("browserWarn");
   const statusEl = document.getElementById("status");
   const captionsEl = document.getElementById("captions");
   const preview = document.getElementById("preview");
   const startBtn = document.getElementById("startBtn");
+  const retryBtn = document.getElementById("retryBtn");
   const muteBtn = document.getElementById("muteBtn");
   const flipBtn = document.getElementById("flipBtn");
   const endBtn = document.getElementById("endBtn");
   const againBtn = document.getElementById("againBtn");
   const doneTitle = document.getElementById("doneTitle");
   const doneBody = document.getElementById("doneBody");
+
+  const ua = navigator.userAgent || "";
+  const inAppBrowser = /WhatsApp|FBAN|FBAV|Instagram|Line\\//i.test(ua);
+  if (inAppBrowser) {
+    browserWarn.innerHTML =
+      "Camera often fails inside WhatsApp. Tap ⋯ / Open in Safari (or Chrome), then Start again. " +
+      "<a href=\\"" + location.href + "\\">Open this link</a>";
+    browserWarn.classList.remove("hidden");
+  }
 
   if (!linkToken) {
     showError("This link is missing its access token. Ask Scout on WhatsApp for a fresh device-help link.");
@@ -245,6 +279,7 @@ export function renderDeviceSupportPage(): string {
   let audioContext = null;
   let processor = null;
   let sourceNode = null;
+  let silentGain = null;
   let playbackTime = 0;
   let playbackCtx = null;
   let facingMode = "environment";
@@ -252,6 +287,7 @@ export function renderDeviceSupportPage(): string {
   let setupComplete = false;
   let ending = false;
   let outcomePosted = false;
+  let connecting = false;
   let frameTimer = null;
   let model = "";
   let captionBuffer = "";
@@ -259,7 +295,13 @@ export function renderDeviceSupportPage(): string {
 
   function showError(msg) {
     errorEl.textContent = msg;
-    errorEl.classList.remove("hidden");
+    errorEl.classList.toggle("hidden", !msg);
+  }
+
+  function showLiveError(msg) {
+    liveErrorEl.textContent = msg || "";
+    liveErrorEl.classList.toggle("hidden", !msg);
+    retryBtn.classList.toggle("hidden", !msg);
   }
 
   function setStatus(msg) {
@@ -276,13 +318,32 @@ export function renderDeviceSupportPage(): string {
     done.classList.remove("hidden");
     doneTitle.textContent = title;
     doneBody.textContent = body;
+    stopAudioPipeline();
   }
 
-  startBtn.addEventListener("click", () => startSession().catch((err) => {
-    console.error(err);
-    showError(err.message || "Could not start the live session.");
-    teardownMedia();
-  }));
+  function bindTrackWatchers(stream) {
+    for (const track of stream.getTracks()) {
+      track.onended = () => {
+        console.warn("media track ended", track.kind, track.label);
+        if (ending || setupComplete) return;
+        if (track.kind === "video") {
+          setStatus("Camera stopped — retrying…");
+          ensureMedia(true).catch((err) => {
+            showLiveError("Camera turned off. Open this page in Safari/Chrome (not WhatsApp), allow camera, then tap Retry.");
+            console.warn(err);
+          });
+        }
+      };
+    }
+  }
+
+  startBtn.addEventListener("click", () => {
+    startSession().catch((err) => handleStartFailure(err));
+  });
+  retryBtn.addEventListener("click", () => {
+    showLiveError("");
+    startSession().catch((err) => handleStartFailure(err));
+  });
 
   muteBtn.addEventListener("click", () => {
     muted = !muted;
@@ -294,7 +355,10 @@ export function renderDeviceSupportPage(): string {
 
   flipBtn.addEventListener("click", () => {
     facingMode = facingMode === "environment" ? "user" : "environment";
-    restartCamera().catch((err) => console.warn("flip failed", err));
+    restartCamera().catch((err) => {
+      console.warn("flip failed", err);
+      showLiveError("Could not flip camera. Try Retry, or open in Safari.");
+    });
   });
 
   endBtn.addEventListener("click", () => endSession("abandoned"));
@@ -302,14 +366,28 @@ export function renderDeviceSupportPage(): string {
     doneBody.textContent = "Close this tab and message Scout on WhatsApp for a new live-help link.";
   });
 
+  function handleStartFailure(err) {
+    console.error(err);
+    connecting = false;
+    const msg = (err && err.message) || "Could not start the live session.";
+    // Keep the camera preview up so the user can see permission worked.
+    setStatus("Connection paused");
+    showLiveError(msg);
+    startBtn.disabled = false;
+  }
+
   async function startSession() {
+    if (connecting) return;
+    connecting = true;
+    ending = false;
     showError("");
+    showLiveError("");
     startBtn.disabled = true;
     setStatus("Requesting camera and microphone…");
     intro.classList.add("hidden");
     live.classList.remove("hidden");
 
-    await ensureMedia();
+    await ensureMedia(false);
 
     setStatus("Getting secure session…");
     const tokenRes = await fetch("/eve/v1/device-support/api/live-token", {
@@ -320,21 +398,41 @@ export function renderDeviceSupportPage(): string {
     const tokenJson = await tokenRes.json().catch(() => ({}));
     if (!tokenRes.ok) {
       const err = tokenJson.error || ("token_failed_" + tokenRes.status);
+      connecting = false;
       if (err === "expired" || err === "already_used") {
         showDone("Link no longer valid", "Ask Scout on WhatsApp for a fresh Tasso+ live-help link.");
         return;
       }
-      throw new Error(tokenJson.message || ("Could not start live session (" + err + ")."));
+      throw new Error(tokenJson.message || ("Could not start live session (" + err + "). Check that GEMINI_API_KEY is configured, then tap Retry."));
     }
 
     model = tokenJson.model;
     const ephemeral = tokenJson.token;
     setStatus("Connecting to live helper…");
     await connectLive(ephemeral, model);
+    connecting = false;
+    showLiveError("");
   }
 
-  async function ensureMedia() {
-    if (mediaStream) return;
+  async function ensureMedia(forceRestart) {
+    if (mediaStream && !forceRestart) {
+      const liveVideo = mediaStream.getVideoTracks().some((t) => t.readyState === "live");
+      const liveAudio = mediaStream.getAudioTracks().some((t) => t.readyState === "live");
+      if (liveVideo || liveAudio) {
+        preview.srcObject = mediaStream;
+        await preview.play().catch(() => {});
+        return;
+      }
+      // Tracks died — fall through and reacquire.
+      stopMediaTracks();
+    }
+
+    const videoConstraints = {
+      facingMode: { ideal: facingMode },
+      width: { ideal: 720 },
+      height: { ideal: 1280 },
+    };
+
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -342,51 +440,71 @@ export function renderDeviceSupportPage(): string {
           noiseSuppression: true,
           channelCount: 1,
         },
-        video: {
-          facingMode,
-          width: { ideal: 720 },
-          height: { ideal: 1280 },
-        },
+        video: videoConstraints,
       });
     } catch (err) {
-      // Voice-only fallback
+      // Fall back to any camera, then voice-only.
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
-          video: false,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            channelCount: 1,
+          },
+          video: true,
         });
-        setCaptions("Camera unavailable — continuing with voice only. Describe what you see.");
       } catch (err2) {
-        throw new Error("Camera/microphone permission is required. Enable access and reload, or return to WhatsApp.");
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+            video: false,
+          });
+          setCaptions("Camera unavailable — continuing with voice only. Describe what you see.");
+        } catch (err3) {
+          throw new Error("Camera/microphone permission is required. Open in Safari/Chrome, allow access, then tap Retry.");
+        }
       }
     }
+
+    bindTrackWatchers(mediaStream);
     preview.srcObject = mediaStream;
+    // iOS needs a fresh play() after srcObject assignment.
     await preview.play().catch(() => {});
   }
 
-  async function restartCamera() {
+  function stopMediaTracks() {
     if (!mediaStream) return;
-    for (const track of mediaStream.getVideoTracks()) track.stop();
+    for (const track of mediaStream.getTracks()) {
+      try { track.stop(); } catch (_) {}
+    }
+    mediaStream = null;
+    preview.srcObject = null;
+  }
+
+  async function restartCamera() {
+    if (!mediaStream) {
+      await ensureMedia(true);
+      return;
+    }
+    const oldVideos = mediaStream.getVideoTracks().slice();
     const fresh = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode, width: { ideal: 720 }, height: { ideal: 1280 } },
+      video: {
+        facingMode: { ideal: facingMode },
+        width: { ideal: 720 },
+        height: { ideal: 1280 },
+      },
       audio: false,
     });
     const videoTrack = fresh.getVideoTracks()[0];
+    if (!videoTrack) throw new Error("No video track");
     mediaStream.addTrack(videoTrack);
-    // Remove old ended video tracks
-    for (const track of mediaStream.getVideoTracks()) {
-      if (track !== videoTrack && track.readyState !== "live") {
-        mediaStream.removeTrack(track);
-      }
+    for (const track of oldVideos) {
+      try { track.stop(); } catch (_) {}
+      mediaStream.removeTrack(track);
     }
-    // Replace any previous live video tracks
-    for (const track of mediaStream.getVideoTracks()) {
-      if (track !== videoTrack) {
-        track.stop();
-        mediaStream.removeTrack(track);
-      }
-    }
+    bindTrackWatchers(mediaStream);
     preview.srcObject = mediaStream;
+    await preview.play().catch(() => {});
   }
 
   function connectLive(ephemeralToken, modelName) {
@@ -451,10 +569,17 @@ export function renderDeviceSupportPage(): string {
 
       ws.onerror = () => {
         clearTimeout(openTimer);
-        if (!setupComplete) reject(new Error("Live connection failed. Check your network and try a fresh link."));
+        if (!setupComplete) {
+          reject(new Error("Live connection failed. Tap Retry. If this keeps happening, open the link in Safari/Chrome."));
+        }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
+        clearTimeout(openTimer);
+        if (!setupComplete && !ending) {
+          reject(new Error("Live connection closed before ready (" + (ev.code || "?") + "). Tap Retry."));
+          return;
+        }
         if (!ending && setupComplete) {
           endSession(lastOutcomeTag || "abandoned");
         }
@@ -501,8 +626,11 @@ export function renderDeviceSupportPage(): string {
 
   function startAudioPipeline() {
     if (!mediaStream) return;
-    audioContext = new AudioContext({ sampleRate: 16000 });
+    stopAudioPipeline();
+    // Prefer default sample rate on mobile; we downsample in the processor if needed.
+    audioContext = new AudioContext();
     playbackCtx = playbackCtx || new AudioContext({ sampleRate: 24000 });
+    if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
     sourceNode = audioContext.createMediaStreamSource(mediaStream);
 
     // ScriptProcessor is deprecated but widely available without worklet bundling.
@@ -511,7 +639,9 @@ export function renderDeviceSupportPage(): string {
     processor.onaudioprocess = (event) => {
       if (!ws || ws.readyState !== WebSocket.OPEN || !setupComplete || muted || ending) return;
       const input = event.inputBuffer.getChannelData(0);
-      const pcm = floatTo16BitPCM(input);
+      const pcm = floatTo16BitPCM(
+        downsampleTo16k(input, audioContext.sampleRate),
+      );
       const b64 = arrayBufferToBase64(pcm.buffer);
       ws.send(JSON.stringify({
         realtimeInput: {
@@ -522,13 +652,37 @@ export function renderDeviceSupportPage(): string {
         },
       }));
     };
+    // Keep the processor graph alive with a silent gain — do NOT connect
+    // the mic processor to destination at full volume (echo / iOS quirks).
+    silentGain = audioContext.createGain();
+    silentGain.gain.value = 0;
     sourceNode.connect(processor);
-    processor.connect(audioContext.destination);
-    // Keep the graph alive but silent for the processor path
-    const gain = audioContext.createGain();
-    gain.gain.value = 0;
-    processor.connect(gain);
-    gain.connect(audioContext.destination);
+    processor.connect(silentGain);
+    silentGain.connect(audioContext.destination);
+  }
+
+  function downsampleTo16k(float32, inputRate) {
+    if (!inputRate || inputRate === 16000) return float32;
+    const ratio = inputRate / 16000;
+    const outLength = Math.max(1, Math.floor(float32.length / ratio));
+    const out = new Float32Array(outLength);
+    for (let i = 0; i < outLength; i++) {
+      out[i] = float32[Math.min(float32.length - 1, Math.floor(i * ratio))] || 0;
+    }
+    return out;
+  }
+
+  function stopAudioPipeline() {
+    try {
+      if (processor) processor.disconnect();
+      if (sourceNode) sourceNode.disconnect();
+      if (silentGain) silentGain.disconnect();
+      if (audioContext) audioContext.close();
+    } catch (_) {}
+    processor = null;
+    sourceNode = null;
+    silentGain = null;
+    audioContext = null;
   }
 
   function startVideoPipeline() {
@@ -679,19 +833,8 @@ export function renderDeviceSupportPage(): string {
       clearInterval(frameTimer);
       frameTimer = null;
     }
-    try {
-      if (processor) processor.disconnect();
-      if (sourceNode) sourceNode.disconnect();
-      if (audioContext) audioContext.close();
-    } catch (_) {}
-    processor = null;
-    sourceNode = null;
-    audioContext = null;
-    if (mediaStream) {
-      for (const track of mediaStream.getTracks()) track.stop();
-      mediaStream = null;
-    }
-    preview.srcObject = null;
+    stopAudioPipeline();
+    stopMediaTracks();
   }
 
   function wait(ms) {

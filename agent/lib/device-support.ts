@@ -185,7 +185,13 @@ export function markLinkStarted(sid: string): VerifyLinkResult {
   if (entry.claims.exp * 1000 < Date.now()) {
     return { ok: false, error: "expired", status: 410 };
   }
-  if (entry.status !== "link_sent") {
+  // Allow remint while the browser is still connecting (WS can fail after mint).
+  // Only terminal outcomes burn the link.
+  if (
+    entry.status === "completed" ||
+    entry.status === "abandoned" ||
+    entry.status === "escalate"
+  ) {
     return { ok: false, error: "already_used", status: 409 };
   }
   entry.status = "started";
