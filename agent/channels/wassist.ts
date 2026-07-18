@@ -13,6 +13,7 @@ import {
   rememberInboundMessage,
   updatePatient,
 } from "#lib/store";
+import { transcribeAudioUrl } from "#lib/transcribe";
 import {
   authenticateWebhook,
   parseWebhookBody,
@@ -67,12 +68,30 @@ function buildUserContent(input: {
   conversationId: string;
   text: string;
   imageUrl: string | null;
+  audioUrl: string | null;
+  transcript: string | null;
 }) {
+  const spoken =
+    input.transcript?.trim() ||
+    input.text.trim() ||
+    (input.imageUrl
+      ? "I sent a photo of my meal."
+      : input.audioUrl
+        ? "I sent a voice note."
+        : "Hi");
+
+  // When we have both a caption and a transcript, keep both.
+  const body =
+    input.transcript?.trim() && input.text.trim()
+      ? `${input.text.trim()}\n${input.transcript.trim()}`
+      : spoken;
+
   const preface = [
     `[patient_phone=${input.phoneNumber}]`,
     `[conversation_id=${input.conversationId}]`,
     input.imageUrl ? `[meal_image_url=${input.imageUrl}]` : null,
-    input.text || (input.imageUrl ? "I sent a photo of my meal." : "Hi"),
+    input.audioUrl ? `[voice_note_url=${input.audioUrl}]` : null,
+    body,
   ]
     .filter(Boolean)
     .join("\n");
@@ -198,25 +217,43 @@ export default defineChannel<ChannelState, Ctx, Target>({
 
       // Ack within Wassist's window; coach reply is sent from turn.completed.
       waitUntil(
-        send(buildUserContent(inbound), {
-          auth: {
-            authenticator: "wassist",
-            principalType: "user",
-            principalId: inbound.phoneNumber,
-            attributes: {
+        (async () => {
+          // Voice notes: STT first so Scout sees text. On failure we still
+          // start a turn with "I sent a voice note." so the patient isn't dropped.
+          const transcript = inbound.audioUrl
+            ? await transcribeAudioUrl(inbound.audioUrl)
+            : null;
+
+          await send(
+            buildUserContent({
               phoneNumber: inbound.phoneNumber,
               conversationId: inbound.conversationId,
-              messageId: inbound.messageId,
+              text: inbound.text,
+              imageUrl: inbound.imageUrl,
+              audioUrl: inbound.audioUrl,
+              transcript,
+            }),
+            {
+              auth: {
+                authenticator: "wassist",
+                principalType: "user",
+                principalId: inbound.phoneNumber,
+                attributes: {
+                  phoneNumber: inbound.phoneNumber,
+                  conversationId: inbound.conversationId,
+                  messageId: inbound.messageId,
+                },
+              },
+              continuationToken: patientContinuationToken(inbound.phoneNumber),
+              state: initialState(
+                inbound.phoneNumber,
+                inbound.conversationId,
+                inbound.messageId,
+              ),
+              title: `WhatsApp ${inbound.phoneNumber}`,
             },
-          },
-          continuationToken: patientContinuationToken(inbound.phoneNumber),
-          state: initialState(
-            inbound.phoneNumber,
-            inbound.conversationId,
-            inbound.messageId,
-          ),
-          title: `WhatsApp ${inbound.phoneNumber}`,
-        }).then(() => undefined),
+          );
+        })(),
       );
 
       return Response.json({ ok: true });
@@ -237,21 +274,9 @@ export default defineChannel<ChannelState, Ctx, Target>({
     /**
      * Demo: wipe all patient sessions by bumping the session epoch.
      * Next WhatsApp message for any phone starts a blank onboarding profile.
-     * Header: x-demo-reset-secret: <DEMO_RESET_SECRET>
+     * Open on purpose for hackathon demos — no auth.
      */
-    POST("/reset-all", async (req) => {
-      const secret = process.env.DEMO_RESET_SECRET?.trim();
-      if (!secret) {
-        return Response.json(
-          { error: "DEMO_RESET_SECRET is not configured" },
-          { status: 503 },
-        );
-      }
-      const provided = req.headers.get("x-demo-reset-secret")?.trim() ?? "";
-      if (provided !== secret) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
-
+    POST("/reset-all", async () => {
       const previousEpoch = getSessionEpoch();
       const sessionEpoch = bumpSessionEpoch();
 

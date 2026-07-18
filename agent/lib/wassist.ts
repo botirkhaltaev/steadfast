@@ -24,6 +24,8 @@ export type InboundMessage = {
   messageId: string;
   text: string;
   imageUrl: string | null;
+  audioUrl: string | null;
+  audioMimeType: string | null;
 };
 
 export type WassistConversation = {
@@ -31,6 +33,11 @@ export type WassistConversation = {
   number?: string;
   phone_number?: string;
   status?: string;
+};
+
+type MediaItem = {
+  url?: string;
+  mimeType?: string;
 };
 
 type PlatformEvent = {
@@ -41,10 +48,70 @@ type PlatformEvent = {
   message?: {
     id?: string;
     body?: string | null;
-    media?: Array<{ url?: string } | null> | null;
+    media?: Array<MediaItem | null> | null;
     buttons?: unknown[] | null;
   } | null;
 };
+
+const IMAGE_PATH_RE = /\.(jpe?g|png|webp)(?:\?|#|$)/i;
+
+/** Classify a media item as image, audio, or unknown (never treat audio as image). */
+export function classifyMediaItem(
+  item: MediaItem | null | undefined,
+): "image" | "audio" | "unknown" {
+  if (!item || typeof item.url !== "string" || !item.url.trim()) {
+    return "unknown";
+  }
+
+  const mime = (item.mimeType ?? "").trim().toLowerCase();
+  const primary = mime.split(";")[0]?.trim() ?? "";
+  if (primary.startsWith("image/")) return "image";
+  if (primary.startsWith("audio/")) return "audio";
+
+  // Missing mimeType: only treat as image when the path looks image-like.
+  if (!primary && IMAGE_PATH_RE.test(item.url)) return "image";
+  return "unknown";
+}
+
+function isHttpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function pickMedia(
+  media: Array<MediaItem | null> | null | undefined,
+): {
+  imageUrl: string | null;
+  audioUrl: string | null;
+  audioMimeType: string | null;
+} {
+  let imageUrl: string | null = null;
+  let audioUrl: string | null = null;
+  let audioMimeType: string | null = null;
+
+  for (const item of media ?? []) {
+    if (!item || typeof item.url !== "string") continue;
+    const url = item.url.trim();
+    if (!url) continue;
+
+    const kind = classifyMediaItem(item);
+    if (kind === "image" && !imageUrl) {
+      imageUrl = url;
+    } else if (kind === "audio" && !audioUrl) {
+      audioUrl = url;
+      const mime = (item.mimeType ?? "").trim();
+      audioMimeType = mime || null;
+    }
+
+    if (imageUrl && audioUrl) break;
+  }
+
+  return { imageUrl, audioUrl, audioMimeType };
+}
 
 /**
  * Verify `x-wassist-signature` (Stripe-style `t=,v1=` HMAC-SHA256).
@@ -146,21 +213,14 @@ export function parseWebhookBody(body: unknown): ParseResult {
   }
 
   const text = (message.body ?? "").trim();
-  const imageUrl =
-    message.media?.find((m) => typeof m?.url === "string" && m.url)?.url ??
-    null;
+  const { imageUrl, audioUrl, audioMimeType } = pickMedia(message.media);
 
-  if (!text && !imageUrl) {
+  if (!text && !imageUrl && !audioUrl) {
     return { kind: "ignored", event };
   }
 
-  if (imageUrl) {
-    try {
-      const url = new URL(imageUrl);
-      if (url.protocol !== "https:" && url.protocol !== "http:") {
-        return { kind: "error", error: "invalid media url" };
-      }
-    } catch {
+  for (const mediaUrl of [imageUrl, audioUrl]) {
+    if (mediaUrl && !isHttpUrl(mediaUrl)) {
       return { kind: "error", error: "invalid media url" };
     }
   }
@@ -173,6 +233,8 @@ export function parseWebhookBody(body: unknown): ParseResult {
       messageId,
       text,
       imageUrl,
+      audioUrl,
+      audioMimeType,
     },
   };
 }

@@ -78,9 +78,12 @@ export type Patient = {
   phoneNumber: string;
   onboardingStatus: OnboardingStatus;
   name: string | null;
+  /** Condition / programme (e.g. weight management, diabetes, heart health). */
+  condition: string | null;
   week: number | null;
   dose: string | null;
   medication: string | null;
+  /** Optional lifestyle fields — not required for onboarding. */
   diet: string | null;
   proteinTargetG: number | null;
   checkInFrequency: CheckInFrequency | null;
@@ -94,9 +97,9 @@ export type Patient = {
   handoffStatus: HandoffStatus;
   /** Required onboarding answer for eMed connect step. */
   emedSetupStatus: EmedSetupStatus;
-  /** Linked eMed home monitor after patient chooses Connect. */
+  /** Linked eMed health data after patient chooses Connect. */
   emedDevice: EmedDeviceLink | null;
-  /** Durable biomarker readings from the linked eMed device. */
+  /** Durable biomarker readings from the linked eMed data. */
   emedReadings: EmedReading[];
   conversationId?: string;
   /** ISO timestamp of last agent-initiated check-in. */
@@ -119,6 +122,7 @@ function blankPatient(phoneNumber = ""): Patient {
     phoneNumber,
     onboardingStatus: "not_started",
     name: null,
+    condition: null,
     week: null,
     dose: null,
     medication: null,
@@ -167,7 +171,6 @@ export function getPatient(phoneNumber: string): Patient {
     );
   }
 
-  // Canonicalize formatting if needed.
   if (current.phoneNumber !== phone) {
     patientState.update((p) => ({ ...p, phoneNumber: phone, updatedAt: now() }));
   }
@@ -233,7 +236,7 @@ export function listEmedReadings(
   };
 }
 
-/** Onboarding: patient chose Connect — link device and sync stand-in readings. */
+/** Onboarding: patient chose Connect — link device and seed readings. */
 export function linkEmedDevice(phoneNumber: string): {
   patient: Patient;
   connectSummary: { deviceLabel: string; weightKg: number; asOf: string };
@@ -361,11 +364,10 @@ export function computeRiskScore(patient: Patient): DropoutRisk {
 export function missingOnboardingFields(patient: Patient): string[] {
   const missing: string[] = [];
   if (!patient.name) missing.push("name");
+  if (!patient.condition) missing.push("condition");
   if (!patient.medication) missing.push("medication");
   if (!patient.dose) missing.push("dose");
   if (patient.week == null) missing.push("week");
-  if (!patient.diet) missing.push("diet");
-  if (patient.proteinTargetG == null) missing.push("proteinTargetG");
   if (!patient.checkInFrequency) missing.push("checkInFrequency");
   if (patient.emedSetupStatus === "pending") missing.push("emedSetup");
   return missing;

@@ -1,17 +1,17 @@
-# Scout & Sage — GLP-1 Dual AI Companion
+# Scout & Sage — WhatsApp Dual AI Care Companion
 
-WhatsApp-native dual AI for GLP-1 persistence: **Scout** (patient companion) and **Sage** (AI clinician), plus a same-origin **Clinician** inbox for human WhatsApp handoffs.
+WhatsApp-native dual AI for chronic care programmes: **Scout** (patient companion) and **Sage** (AI clinician), plus a same-origin **Clinician** inbox for human WhatsApp handoffs.
 
-Patient UI stays on WhatsApp. Clinicians use the Next.js inbox in this repo (`/`) to reply into the same Wassist thread after Scout escalates.
+Patient UI stays on WhatsApp (onboarding, check-ins, side-effect / adherence coaching, optional meal-photo nutrition, quick replies, dropout-risk awareness, Sage consults). Clinicians use the Next.js inbox in this repo (`/`) to reply into the same Wassist thread after Scout escalates.
 
 Built with [Wassist](https://wassist.app) + [Vercel Eve](https://eve.dev) + Next.js (`withEve` — one app, one origin).
 
 ## Why
 
-- 46.5% of T2D and 64.8% of non-diabetic patients discontinue GLP-1s within 12 months (*JAMA Netw Open* 2025, n=125,474); quitters regain ~⅔ of weight.
-- 25–40% of weight lost can be lean mass; real-world users often under-eat protein.
-- Health apps retain ~4% at 30 days — WhatsApp is where patients already live.
-- One warm companion plus a specialist AI clinician beats a single generic chatbot for adherence *and* clinical situational awareness.
+- Chronic programmes lose patients between visits, and clinicians get pulled into routine questions.
+- Health apps retain ~4% of users at 30 days — WhatsApp is where patients already live.
+- One warm companion plus a specialist AI clinician beats a single generic chatbot for adherence and clinical situational awareness.
+- Sage reviews in the background so clinicians are only pulled in when necessary.
 
 ## Architecture
 
@@ -23,6 +23,8 @@ Wassist platform webhook (signed)
    │ POST /webhook
    ▼
 Eve root agent — Scout  (agent/)
+   instructions.md   — onboarding + coach + when to call Sage / escalate
+   defineState       — durable patient (+ condition, sageBriefs, emed, handoff)
    escalate_to_clinician → global queue (.eve/escalations.json)
    handoffStatus: human → Scout pauses coaching
    │
@@ -36,7 +38,7 @@ Next.js clinician UI  (app/)  ← same origin via withEve
    POST /clinician/escalations/:id/resolve   → return thread to Scout
 ```
 
-`next.config.ts` wraps the app with [`withEve`](https://eve.dev/docs/guides/frontend/nextjs) so `npm run dev` boots Next + Eve together. Custom channel routes (`/webhook`, `/clinician/*`, `/health`, …) are rewritten to the Eve process (withEve alone only mounts `/eve/v1/*`).
+`next.config.mjs` wraps the app with [`withEve`](https://eve.dev/docs/guides/frontend/nextjs) so `npm run dev` boots Next + Eve together. Custom channel routes (`/webhook`, `/clinician/*`, `/health`, …) are rewritten to the Eve process (withEve alone only mounts `/eve/v1/*`).
 
 ## Clinician UI
 
@@ -52,22 +54,29 @@ No clinician auth in this demo.
 New numbers start with an empty durable profile (`emedSetupStatus: pending`).
 
 1. Welcome + disclose you're not a doctor (Scout; Sage partners; eMed can connect)
-2. One question at a time: name (typed) → medication → dose → week → diet → protein → **check-in frequency** → **eMed setup**
-3. Almost everything uses WhatsApp **quick-reply buttons** (`offer_choices`, max 3) — only name needs typing
-4. **eMed step (required):** Connect eMed / I don't have one / Not now
-5. Connect writes that user’s device + readings into durable state (stand-in until live eMed API)
-6. When onboarding completes, coaching unlocks
+2. One question at a time: name (typed) → condition → medication → dose → week → check-in frequency → eMed setup
+3. **Tap-first:** almost everything is WhatsApp quick-reply buttons (`offer_choices`, max 3). Name is the only required typing step; **Other** is the escape hatch for custom med/dose
+4. Condition-aware med buttons (e.g. Weight → Semaglutide / Tirzepatide / Other; Diabetes → Metformin / Insulin / Other)
+5. Dose buttons follow the chosen medication
+6. **eMed step (required):** Connect eMed / I don't have one / Not now
+7. Connect writes that user’s health data + readings into durable state
+8. One confirmation summary: cadence + eMed outcome (linked / no device / skipped)
+
+Diet and protein target are optional. Coaching, optional meal vision, and risk scoring unlock only after onboarding completes.
 
 ## Stack
 
 | Piece | Role |
 | --- | --- |
 | Next.js (`withEve`) | Clinician UI + same-origin proxy to Eve |
-| Wassist | WhatsApp pipe, media, quick replies |
+| Wassist | WhatsApp pipe, media, quick replies, voice notes |
 | Vercel Eve | Durable agent, tools, schedules, `defineState`, subagents |
-| Scout (root) | Patient companion on WhatsApp |
-| Sage (subagent) | AI clinician — briefs, eMed tools |
+| Scout (root) | Patient companion on WhatsApp (no eMed reading tools) |
+| Sage (subagent) | AI clinician — briefs, eMed biomarker tools |
 | Escalation queue | File-backed global inbox (`.eve/escalations.json` or `/tmp` on Vercel) |
+| Eve `defineState` | Patient DB incl. condition + eMed link/readings + handoff |
+| OpenAI via AI Gateway | Coach + meal vision + voice transcription |
+| Runware FLUX | Optional higher-protein meal visuals |
 
 ## Setup
 
@@ -87,13 +96,17 @@ Eve-only (no UI): `npm run dev:eve`.
 
 Optional: `NEXT_PUBLIC_EVE_URL` if the UI must call a remote Eve origin (same-origin is the default with `withEve`).
 
+### eMed health data (onboarding)
+
+Patients explicitly choose during onboarding. **Connect** links per-user eMed health data and stores readings in Eve state. Skip / no device leaves them unlinked. **Sage** reads linked data via `get_emed_device` / `get_emed_biomarkers`. Scout connects via `update_onboarding` only — no clinical read tools.
+
 ### Wire Wassist
 
 1. Create a webhook at [wassist.app/developers/webhooks](https://wassist.app/developers/webhooks)
 2. URL: your deploy host + `/webhook`
 3. Subscribe to `message.received`
 4. Copy the signing secret into `WASSIST_WEBHOOK_SECRET`
-5. Point your number’s routing at this integration (**one** webhook)
+5. Point your number’s routing at this integration (**one** webhook — do not also attach a second BYOA/agent webhook to the same URL)
 6. Set `WASSIST_API_KEY` so replies can be sent via the Conversations API
 
 ## Deploy
@@ -111,7 +124,6 @@ Env vars:
 - `WASSIST_API_KEY`
 - `WASSIST_WEBHOOK_SECRET` (required in production — HMAC `x-wassist-signature`)
 - `RUNWARE_API_KEY`
-- `DEMO_RESET_SECRET` (required for `POST /reset-all` demo wipe)
 - `CLINICIAN_WEBHOOK_URL` (optional Slack/PagerDuty notify on escalate)
 - `NEXT_PUBLIC_EVE_URL` (optional; only if UI is not same-origin)
 
@@ -119,27 +131,31 @@ Health: `GET /health` · Eve: `GET /eve/v1/health` · Inbox: `GET /`
 
 ### Demo reset (wipe all sessions)
 
+Patient data lives in Eve durable **sessions** (not a separate Postgres). Restarting the app does **not** clear them. To demo from scratch:
+
 ```bash
-curl -X POST https://<your-host>/reset-all \
-  -H "x-demo-reset-secret: $DEMO_RESET_SECRET"
+curl -X POST https://<your-host>/reset-all
 ```
+
+This bumps a session epoch so every phone gets a **new** Eve session on the next WhatsApp message (blank onboarding / eMed). Open endpoint — no auth (hackathon demos).
 
 ## Demo (live WhatsApp + clinician inbox)
 
-1. New chat → onboarding with quick replies (incl. eMed Connect) → confirm profile
+1. New chat → onboarding with quick replies (condition, frequency, eMed Connect) → confirm profile
 2. Agent-initiated check-in on their cadence (or `POST /proactive-checkin`)
-3. “Rough week, nauseous, skipped a dose” → Scout coaches; may consult Sage on risk
-4. Lunch photo → protein estimate + Runware upgrade image
-5. “Bad stomach pain” → Scout → Sage → `escalate_to_clinician` → patient told a **human** is joining
-6. Open `/` → case → reply on WhatsApp → Resolve / return to Scout
+3. “Rough week, side effects, skipped a dose” → Scout coaches; may consult Sage on risk
+4. If they connected eMed → Scout consults Sage → Sage pulls that user’s biomarkers
+5. Optional: lunch photo → protein estimate + Runware upgrade image
+6. “Bad stomach pain” → Scout → Sage → `escalate_to_clinician` → patient told a **human** is joining
+7. Open `/` → case → reply on WhatsApp → Resolve / return to Scout
 
 ## Safety
 
-- Adherence & nutrition only — never diagnoses or changes doses
+- Adherence & behaviour coaching only — never diagnoses or changes doses
 - Red flags → emergency-care messaging + Sage + human escalate when needed
 - While `handoffStatus` is human, Scout does not coach (short ack only)
 - Shell / web / file built-ins disabled
 
 ## Pitch close
 
-`$1,000/mo drug × ~50% churn wastes millions per employer cohort. Scout keeps the ritual where patients already are — WhatsApp — while Sage keeps the clinical picture sharp.`
+Scout makes onboarding easy and runs warm check-ins where patients already are: WhatsApp. Sage handles clinical review in the background so clinicians are not pulled in unless it matters.
