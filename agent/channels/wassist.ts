@@ -128,7 +128,7 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
       Response.json({
         ok: true,
         service: "steadfast-wassist",
-        webhook: "/eve/v1/wassist/webhook",
+        webhook: "/webhook",
       }),
     ),
   ],

@@ -1,0 +1,22 @@
+- generic [ref=f10e2]:
+  - link "Skip to content":
+    - /url: "#geist-skip-nav"
+  - alert [ref=f10e1]
+  - generic [ref=f10e4]:
+    - generic [ref=f10e7]:
+      - generic [ref=f10e17]:
+        - heading "Continue with Vercel" [level=1] [ref=f10e18]
+        - paragraph [ref=f10e19]: Use your Vercel account to sign in to Vercel
+      - generic [ref=f10e58]:
+        - paragraph [ref=f10e59]: If you have a Vercel account, we sent a code to zlac172@live.rhul.ac.uk.
+        - generic [ref=f10e60]:
+          - generic:
+            - generic: "|"
+            - textbox "Verification code sent to zlac172@live.rhul.ac.uk" [active] [ref=f10e61]
+        - button "Use a Different Email" [ref=f10e63] [cursor=pointer]
+    - contentinfo [ref=f10e52]:
+      - generic [ref=f10e54]:
+        - link "Terms" [ref=f10e55] [cursor=pointer]:
+          - /url: /legal/terms
+        - link "Privacy Policy" [ref=f10e56] [cursor=pointer]:
+          - /url: /legal/privacy-policy

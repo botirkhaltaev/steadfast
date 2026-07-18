@@ -1,0 +1,38 @@
+- generic [ref=f6e1]:
+  - link "Skip to content":
+    - /url: "#geist-skip-nav"
+  - alert [ref=f6e2]
+  - generic [ref=f6e4]:
+    - generic [ref=f6e7]:
+      - generic [ref=f6e17]:
+        - heading "Continue with Vercel" [level=1] [ref=f6e18]
+        - paragraph [ref=f6e19]: Use your Vercel account to sign in to An MCP client
+      - generic [ref=f6e20]:
+        - generic [ref=f6e21]:
+          - textbox "Email" [active] [ref=f6e23]:
+            - /placeholder: Email Address
+          - button "Continue with Email" [ref=f6e24] [cursor=pointer]
+        - generic [ref=f6e27]:
+          - button "Continue with Google" [ref=f6e28] [cursor=pointer]:
+            - generic [ref=f6e33]:
+              - generic [ref=f6e34]: Continue with
+              - text: Google
+          - button "Continue with GitHub" [ref=f6e35] [cursor=pointer]:
+            - generic [ref=f6e39]:
+              - generic [ref=f6e40]: Continue with
+              - text: GitHub
+          - button "Continue with Apple" [ref=f6e41] [cursor=pointer]:
+            - generic [ref=f6e45]:
+              - generic [ref=f6e46]: Continue with
+              - text: Apple
+          - button "Show other options" [ref=f6e47] [cursor=pointer]
+      - paragraph [ref=f6e50]:
+        - text: Don't have an account?
+        - link "Sign Up" [ref=f6e51] [cursor=pointer]:
+          - /url: /oauth/authorize?client_id=cl_WbdtcToDrMR4ZHvXLGAmbfoYCsQjMeS8&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A18789%2Fcallback&scope=openid+email+offline_access+profile&code_challenge=wyh7pmQgZzjI0JseQ7SNAtSmDizPeIXjFGVDZkcY-kY&code_challenge_method=S256&state=_G038Zu0xcS89oUnL5R6zw&mode=signup
+    - contentinfo [ref=f6e52]:
+      - generic [ref=f6e54]:
+        - link "Terms" [ref=f6e55] [cursor=pointer]:
+          - /url: /legal/terms
+        - link "Privacy Policy" [ref=f6e56] [cursor=pointer]:
+          - /url: /legal/privacy-policy

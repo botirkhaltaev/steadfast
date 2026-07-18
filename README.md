@@ -68,7 +68,9 @@ npm run dev          # interactive: npm exec -- eve dev
 1. Sign up at [wassist.app](https://wassist.app/login).  
 2. Create **Bring Your Own Agent** with webhook:
 
-   `https://<your-host>/eve/v1/wassist/webhook`
+   `https://<your-host>/webhook`
+
+   Production: `https://steadfast-olive.vercel.app/webhook`
 
 3. Message the sandbox number — first turns run **onboarding**.
 
@@ -79,7 +81,10 @@ npx eve deploy
 # or: npx vercel --yes
 ```
 
-Health: `GET /eve/v1/wassist/health`
+Set env on Vercel: `AI_GATEWAY_API_KEY` (or rely on Gateway OIDC), `WASSIST_API_KEY`, `RUNWARE_API_KEY`.
+
+Health: `GET /health` → `{"ok":true,"service":"steadfast-wassist","webhook":"/webhook"}`  
+Eve: `GET /eve/v1/health`
 
 ## Demo (live WhatsApp)
 
