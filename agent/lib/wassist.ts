@@ -242,3 +242,78 @@ export async function listConversations(): Promise<WassistConversation[]> {
     | { results?: WassistConversation[] };
   return Array.isArray(json) ? json : (json.results ?? []);
 }
+
+export type WassistMessage = {
+  id?: string;
+  role?: string;
+  direction?: string;
+  text: string;
+  createdAt?: string;
+  [key: string]: unknown;
+};
+
+/**
+ * List messages for a Wassist conversation.
+ * Field shapes vary by API version — normalize common text/time keys for the UI.
+ */
+export async function listMessages(
+  conversationId: string,
+): Promise<WassistMessage[]> {
+  const apiKey = process.env.WASSIST_API_KEY;
+  if (!apiKey) {
+    throw new Error("WASSIST_API_KEY is not set");
+  }
+
+  const res = await fetch(
+    `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/messages/`,
+    {
+      headers: {
+        "X-API-Key": apiKey,
+        Accept: "application/json",
+      },
+    },
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Wassist list messages failed (${res.status}): ${text}`,
+    );
+  }
+
+  const data = (await res.json()) as unknown;
+  const raw = Array.isArray(data)
+    ? data
+    : Array.isArray((data as { results?: unknown }).results)
+      ? (data as { results: unknown[] }).results
+      : Array.isArray((data as { messages?: unknown }).messages)
+        ? (data as { messages: unknown[] }).messages
+        : Array.isArray((data as { data?: unknown }).data)
+          ? (data as { data: unknown[] }).data
+          : [];
+
+  return raw.map((item) => {
+    const m = (item ?? {}) as Record<string, unknown>;
+    const text =
+      (typeof m.text === "string" && m.text) ||
+      (typeof m.body === "string" && m.body) ||
+      (typeof (m.text as { body?: unknown } | undefined)?.body === "string" &&
+        (m.text as { body: string }).body) ||
+      (typeof m.content === "string" && m.content) ||
+      (typeof m.message === "string" && m.message) ||
+      "";
+    const createdAt =
+      (typeof m.createdAt === "string" && m.createdAt) ||
+      (typeof m.created_at === "string" && m.created_at) ||
+      (typeof m.timestamp === "string" && m.timestamp) ||
+      undefined;
+    return {
+      ...m,
+      id: typeof m.id === "string" ? m.id : undefined,
+      role: typeof m.role === "string" ? m.role : undefined,
+      direction: typeof m.direction === "string" ? m.direction : undefined,
+      text,
+      createdAt,
+    } satisfies WassistMessage;
+  });
+}
