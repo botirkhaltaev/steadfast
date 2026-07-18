@@ -8,11 +8,7 @@ import {
   patientContinuationToken,
 } from "#lib/session-epoch";
 import { waitForTurnSettlement } from "#lib/session-wait";
-import {
-  getPatient,
-  rememberInboundMessage,
-  updatePatient,
-} from "#lib/store";
+import { getPatient, updatePatient } from "#lib/store";
 import { transcribeAudioUrl } from "#lib/transcribe";
 import {
   authenticateWebhook,
@@ -27,8 +23,6 @@ type ChannelState = {
   phoneNumber: string | null;
   conversationId: string | null;
   messageId: string | null;
-  /** True when this WhatsApp message was already handled in a prior turn. */
-  duplicate: boolean;
   pendingButtons: QuickReplyButton[] | null;
   pendingImageUrl: string | null;
   pendingTexts: string[];
@@ -47,7 +41,6 @@ function initialState(
     phoneNumber,
     conversationId,
     messageId,
-    duplicate: false,
     pendingButtons: null,
     pendingImageUrl: null,
     pendingTexts: [],
@@ -110,7 +103,7 @@ function buildUserContent(input: {
 
 async function flush(channel: { state: ChannelState }, fallbackText?: string) {
   const { state } = channel;
-  if (state.duplicate || state.sent) return;
+  if (state.sent) return;
 
   const conversationId = state.conversationId;
   if (!conversationId) {
@@ -377,9 +370,8 @@ export default defineChannel<ChannelState, Ctx, Target>({
       channel.state.pendingButtons = null;
       channel.state.pendingImageUrl = null;
       channel.state.sent = false;
-      channel.state.duplicate = false;
 
-      const { phoneNumber, conversationId, messageId } = channel.state;
+      const { phoneNumber, conversationId } = channel.state;
 
       if (phoneNumber && conversationId) {
         try {
@@ -389,22 +381,9 @@ export default defineChannel<ChannelState, Ctx, Target>({
           console.warn("[wassist] conversationId persist failed", err);
         }
       }
-
-      if (phoneNumber && messageId) {
-        // Same WhatsApp message must not run two coach turns.
-        channel.state.duplicate = !rememberInboundMessage(phoneNumber, messageId);
-        if (channel.state.duplicate) {
-          console.info("[wassist] duplicate message skipped", {
-            phoneNumber,
-            messageId,
-          });
-        }
-      }
     },
 
     "action.result"(eventData, channel) {
-      if (channel.state.duplicate) return;
-
       const choices = toolResultFrom(eventData.result, offerChoices);
       if (choices?.output?.buttons?.length) {
         channel.state.pendingButtons = choices.output.buttons;
@@ -417,7 +396,6 @@ export default defineChannel<ChannelState, Ctx, Target>({
     },
 
     "message.completed"(eventData, channel) {
-      if (channel.state.duplicate) return;
       if (eventData.finishReason === "tool-calls") return;
 
       const text =
@@ -437,7 +415,6 @@ export default defineChannel<ChannelState, Ctx, Target>({
     },
 
     async "turn.failed"(eventData, channel) {
-      if (channel.state.duplicate) return;
       if (!channel.state.conversationId) return;
       const detail =
         typeof eventData.message === "string"
@@ -462,7 +439,6 @@ export default defineChannel<ChannelState, Ctx, Target>({
     },
 
     async "session.failed"(_eventData, channel) {
-      if (channel.state.duplicate) return;
       if (!channel.state.conversationId) return;
       // Racing second delivery (HookConflict) must not spam an apology.
       // Only flush coach text already buffered; never invent a new message.

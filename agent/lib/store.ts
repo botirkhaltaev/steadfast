@@ -125,8 +125,6 @@ export type Patient = {
   conversationId?: string;
   /** ISO timestamp of last agent-initiated check-in. */
   lastProactiveCheckInAt?: string;
-  /** WhatsApp message ids already coached on (newest last). */
-  seenMessageIds?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -513,28 +511,3 @@ export function countRecentDeviceSupportLinks(
   }).length;
 }
 
-/**
- * Record that this WhatsApp message is being handled.
- * Returns false if it was already seen (duplicate webhook / fan-out).
- */
-export function rememberInboundMessage(
-  phoneNumber: string,
-  messageId: string,
-): boolean {
-  getPatient(phoneNumber);
-  const result = { firstSeen: false };
-  patientState.update((p) => {
-    const seen = p.seenMessageIds ?? [];
-    if (seen.includes(messageId)) {
-      result.firstSeen = false;
-      return p;
-    }
-    result.firstSeen = true;
-    return {
-      ...p,
-      seenMessageIds: [...seen, messageId].slice(-50),
-      updatedAt: now(),
-    };
-  });
-  return result.firstSeen;
-}
