@@ -3,6 +3,7 @@ import type { SessionAuthContext } from "eve/context";
 import wassist from "./wassist";
 import {
   buildDeviceSupportOutcomeMessage,
+  GeminiRateLimitError,
   markLinkOutcome,
   markLinkStarted,
   mintGeminiEphemeralToken,
@@ -86,6 +87,13 @@ export default defineChannel<ChannelState>({
         const message =
           err instanceof Error ? err.message : "Failed to mint live token";
         console.error("[device-support] live-token mint failed", err);
+        if (err instanceof GeminiRateLimitError || /\b429\b|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+          return jsonError(
+            "rate_limited",
+            429,
+            "The live helper is temporarily rate-limited by Google (429). Wait about a minute, then ask Scout for a fresh link — or raise the Gemini quota / billing tier in Google AI Studio.",
+          );
+        }
         return jsonError("mint_failed", 502, message);
       }
     }),

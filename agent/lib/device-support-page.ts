@@ -342,6 +342,14 @@ export function renderDeviceSupportPage(): string {
         showDone("Link no longer valid", "Ask Scout on WhatsApp for a fresh Tasso+ live-help link.");
         return;
       }
+      if (err === "rate_limited" || tokenRes.status === 429) {
+        showDone(
+          "Live helper is busy",
+          tokenJson.message ||
+            "Google rate-limited this project (429). Wait about a minute, then ask Scout on WhatsApp for a fresh link.",
+        );
+        return;
+      }
       throw new Error(tokenJson.message || ("Could not start live session (" + err + ")."));
     }
 
@@ -503,8 +511,13 @@ export function renderDeviceSupportPage(): string {
 
       ws.onclose = (ev) => {
         if (!ending && !setupComplete) {
-          const reason = (ev && ev.reason) ? ev.reason : ("code " + (ev && ev.code));
-          fail(new Error("Live connection closed before ready (" + reason + "). Try a fresh link."));
+          const reason = (ev && ev.reason) ? String(ev.reason) : "";
+          const code = ev && ev.code;
+          if (code === 1008 || /429|RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(reason)) {
+            fail(new Error("Live helper rate-limited by Google (429). Wait a minute and ask Scout for a fresh link."));
+            return;
+          }
+          fail(new Error("Live connection closed before ready (" + (reason || ("code " + code)) + "). Try a fresh link."));
           return;
         }
         if (!ending && setupComplete) {

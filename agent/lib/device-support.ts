@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { eq, lt } from "drizzle-orm";
-import { GoogleGenAI, Modality } from "@google/genai";
+import { ApiError, GoogleGenAI, Modality } from "@google/genai";
 import { getDb } from "#db/client";
 import { deviceSupportLinks } from "#db/schema";
 import { normalizePhone } from "#lib/phone";
@@ -11,6 +11,31 @@ import type { DeviceSupportStatus } from "#lib/store";
 export const LINK_TTL_MS = 60 * 60 * 1000;
 /** Max Tasso live links per patient per rolling 24h. */
 export const MAX_LINKS_PER_DAY = 5;
+
+/** Thrown when Gemini rejects the request due to project quota / rate limits. */
+export class GeminiRateLimitError extends Error {
+  readonly status = 429;
+  constructor(message: string) {
+    super(message);
+    this.name = "GeminiRateLimitError";
+  }
+}
+
+function isRateLimitError(err: unknown): boolean {
+  if (err instanceof GeminiRateLimitError) return true;
+  if (err instanceof ApiError && err.status === 429) return true;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return (
+    /\b429\b/.test(msg) ||
+    /RESOURCE_EXHAUSTED/i.test(msg) ||
+    /rate.?limit/i.test(msg) ||
+    /quota/i.test(msg)
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export type DeviceSupportOutcome =
   | "completed"
@@ -323,38 +348,66 @@ export async function mintGeminiEphemeralToken(opts: {
   const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
   const newSessionExpireTime = new Date(Date.now() + 2 * 60 * 1000).toISOString();
 
-  const token = await client.authTokens.create({
-    config: {
-      uses: 1,
-      expireTime,
-      newSessionExpireTime,
-      liveConnectConstraints: {
-        model,
-        config: {
-          responseModalities: [Modality.AUDIO],
-          systemInstruction,
-          outputAudioTranscription: {},
-          // A/V sessions hit a ~2 min wall without compression.
-          contextWindowCompression: {
-            triggerTokens: "10000",
-            slidingWindow: { targetTokens: "8000" },
+  const createToken = () =>
+    client.authTokens.create({
+      config: {
+        uses: 1,
+        expireTime,
+        newSessionExpireTime,
+        liveConnectConstraints: {
+          model,
+          config: {
+            responseModalities: [Modality.AUDIO],
+            systemInstruction,
+            outputAudioTranscription: {},
+            // A/V sessions hit a ~2 min wall without compression.
+            contextWindowCompression: {
+              triggerTokens: "10000",
+              slidingWindow: { targetTokens: "8000" },
+            },
+            sessionResumption: {},
+            temperature: 0.7,
           },
-          sessionResumption: {},
-          temperature: 0.7,
         },
+        // Only lock fields we set; leave the rest unlocked for client session setup.
+        lockAdditionalFields: [],
+        httpOptions: { apiVersion: "v1alpha" },
       },
-      // Only lock fields we set; leave the rest unlocked for client session setup.
-      lockAdditionalFields: [],
-      httpOptions: { apiVersion: "v1alpha" },
-    },
-  });
+    });
 
-  const name = token.name;
-  if (!name) {
-    throw new Error("Gemini auth token missing name");
+  // Preview Live models share a tight project quota. Retry a few times on 429.
+  const maxAttempts = 4;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const token = await createToken();
+      const name = token.name;
+      if (!name) {
+        throw new Error("Gemini auth token missing name");
+      }
+      return { token: name, model };
+    } catch (err) {
+      lastErr = err;
+      if (!isRateLimitError(err) || attempt === maxAttempts) break;
+      const delayMs = Math.min(8000, 500 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 250);
+      console.warn(
+        `[device-support] Gemini rate limited minting token (attempt ${attempt}/${maxAttempts}); retry in ${delayMs}ms`,
+        err instanceof Error ? err.message : err,
+      );
+      await sleep(delayMs);
+    }
   }
 
-  return { token: name, model };
+  if (isRateLimitError(lastErr)) {
+    const detail =
+      lastErr instanceof Error ? lastErr.message : "Gemini quota exceeded";
+    throw new GeminiRateLimitError(
+      `Gemini Live is rate-limited for this API project (429). Wait a minute and retry, or raise the quota in Google AI Studio. ${detail}`,
+    );
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("Failed to mint Gemini live token");
 }
 
 export function buildDeviceSupportOutcomeMessage(opts: {
