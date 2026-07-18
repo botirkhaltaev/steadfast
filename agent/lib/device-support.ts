@@ -67,7 +67,7 @@ export function publicBaseUrl(): string {
 
 export function geminiLiveModel(): string {
   return (
-    process.env.GEMINI_LIVE_MODEL?.trim() || "gemini-2.5-flash-native-audio-preview-12-2025"
+    process.env.GEMINI_LIVE_MODEL?.trim() || "gemini-3.1-flash-live-preview"
   );
 }
 
