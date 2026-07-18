@@ -16,7 +16,7 @@ Built with [Wassist](https://wassist.app) BYOA + [Vercel Eve](https://eve.dev).
 
 ```
 WhatsApp  ⇄  Wassist BYOA
-                │ POST /eve/v1/wassist/webhook
+                │ POST /webhook
                 │ { message, image?, phone_number, reply_callback }
                 ▼
          Eve agent (Vercel)

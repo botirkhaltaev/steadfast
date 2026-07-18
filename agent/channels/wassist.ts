@@ -1,7 +1,14 @@
 import { defineChannel, GET, POST } from "eve/channels";
 import { toolResultFrom } from "eve/tools";
+import { isAllowedReplyCallback } from "#lib/callback-url";
+import {
+  abandonDelivery,
+  armDeliveryWait,
+  createDeliveryKey,
+  signalDelivery,
+  wasDeliveryAbandoned,
+} from "#lib/delivery-wait";
 import { normalizePhone } from "#lib/phone";
-import { waitForTurnSettlement } from "#lib/session-wait";
 import {
   sendViaCallback,
   verifyWebhookSecret,
@@ -20,6 +27,7 @@ type WassistState = {
   phoneNumber: string | null;
   replyCallback: string | null;
   conversationId: string | null;
+  deliveryKey: string | null;
   pendingButtons: QuickReplyButton[] | null;
   pendingImageUrl: string | null;
   /** Assembled assistant texts for this turn (sent once on turn.completed). */
@@ -35,6 +43,8 @@ type WassistCtx = {
   state: WassistState;
 };
 
+const DELIVERY_TIMEOUT_MS = 50_000;
+
 function tokenFor(phoneNumber: string) {
   return normalizePhone(phoneNumber);
 }
@@ -43,11 +53,13 @@ function freshState(
   phoneNumber: string | null,
   replyCallback: string | null = null,
   conversationId: string | null = null,
+  deliveryKey: string | null = null,
 ): WassistState {
   return {
     phoneNumber,
     replyCallback,
     conversationId,
+    deliveryKey,
     pendingButtons: null,
     pendingImageUrl: null,
     pendingTexts: [],
@@ -55,17 +67,38 @@ function freshState(
   };
 }
 
+function hasModelCredentials(): boolean {
+  // On Vercel, AI Gateway can authenticate via project OIDC without a raw key.
+  return Boolean(
+    process.env.AI_GATEWAY_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.VERCEL,
+  );
+}
+
 async function flushOutbound(
   channel: { state: WassistState },
-  opts?: { fallbackText?: string },
+  opts?: { fallbackText?: string; outcome?: "delivered" | "failed" },
 ) {
-  if (channel.state.deliveredThisTurn) return;
+  const deliveryKey = channel.state.deliveryKey;
+  const outcome = opts?.outcome ?? "delivered";
+
+  if (wasDeliveryAbandoned(deliveryKey)) {
+    // Webhook already sent a timeout apology; do not double-message.
+    return;
+  }
+
+  if (channel.state.deliveredThisTurn) {
+    signalDelivery(deliveryKey, outcome);
+    return;
+  }
 
   const replyCallback = channel.state.replyCallback;
   if (!replyCallback) {
     console.warn("[wassist] no reply_callback; dropping outbound", {
       phoneNumber: channel.state.phoneNumber,
     });
+    signalDelivery(deliveryKey, "failed");
     return;
   }
 
@@ -75,7 +108,10 @@ async function flushOutbound(
       .filter(Boolean)
       .join("\n\n") || opts?.fallbackText;
 
-  if (!text) return;
+  if (!text) {
+    signalDelivery(deliveryKey, outcome === "failed" ? "failed" : "delivered");
+    return;
+  }
 
   const buttons = channel.state.pendingButtons;
   const imageUrl = channel.state.pendingImageUrl;
@@ -85,15 +121,23 @@ async function flushOutbound(
   channel.state.pendingTexts = [];
   channel.state.deliveredThisTurn = true;
 
-  await sendViaCallback(replyCallback, {
-    content: text,
-    ...(buttons?.length ? { buttons } : {}),
-    ...(imageUrl ? { imageUrl } : {}),
-  });
+  try {
+    await sendViaCallback(replyCallback, {
+      content: text,
+      ...(buttons?.length ? { buttons } : {}),
+      ...(imageUrl ? { imageUrl } : {}),
+    });
+    signalDelivery(deliveryKey, outcome);
+  } catch (err) {
+    channel.state.deliveredThisTurn = false;
+    signalDelivery(deliveryKey, "failed");
+    throw err;
+  }
 }
 
 export default defineChannel<WassistState, WassistCtx, WassistTarget>({
-  cors: true,
+  // Server-to-server webhook — no browser CORS needed.
+  cors: false,
   state: freshState(null),
 
   context(state) {
@@ -127,7 +171,13 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
 
-      const body = (await req.json()) as WassistWebhookPayload;
+      let body: WassistWebhookPayload;
+      try {
+        body = (await req.json()) as WassistWebhookPayload;
+      } catch {
+        return Response.json({ error: "invalid json" }, { status: 400 });
+      }
+
       const phoneNumber = normalizePhone(body.phone_number ?? "");
       if (!phoneNumber) {
         return Response.json({ error: "phone_number required" }, { status: 400 });
@@ -135,16 +185,36 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
 
       const text = (body.message ?? "").trim();
       const imageUrl = body.image ?? null;
-      const replyCallback = body.reply_callback ?? null;
+      const replyCallback = body.reply_callback?.trim() || null;
       const conversationId = body.conversation_id ?? null;
 
+      if (replyCallback && !isAllowedReplyCallback(replyCallback)) {
+        console.warn("[wassist] rejected reply_callback host", {
+          phoneNumber,
+          host: (() => {
+            try {
+              return new URL(replyCallback).host;
+            } catch {
+              return "invalid";
+            }
+          })(),
+        });
+        return Response.json({ error: "invalid reply_callback" }, { status: 400 });
+      }
+
+      if (imageUrl) {
+        try {
+          const parsed = new URL(imageUrl);
+          if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+            return Response.json({ error: "invalid image url" }, { status: 400 });
+          }
+        } catch {
+          return Response.json({ error: "invalid image url" }, { status: 400 });
+        }
+      }
+
       // Fail fast when the model cannot run — avoid 50s hangs on misconfigured deploys.
-      const hasModelCreds = Boolean(
-        process.env.AI_GATEWAY_API_KEY ||
-          process.env.OPENAI_API_KEY ||
-          process.env.VERCEL, // hosted Vercel can use AI Gateway OIDC
-      );
-      if (!hasModelCreds && replyCallback) {
+      if (!hasModelCredentials() && replyCallback) {
         waitUntil(
           sendViaCallback(replyCallback, {
             content:
@@ -176,11 +246,16 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
           ]
         : preface;
 
-      // Critical: waitUntil must cover the full turn. send() resolves early;
-      // without waiting for settlement, Vercel can freeze before reply_callback.
+      const deliveryKey = createDeliveryKey(phoneNumber);
+
+      // Critical: waitUntil must cover flushOutbound. send() resolves early;
+      // getEventStream replay is the wrong signal (stale session.waiting).
+      // Channel handlers signal this latch after the WhatsApp callback POST.
       waitUntil(
         (async () => {
-          const session = await send(content, {
+          const delivery = armDeliveryWait(deliveryKey);
+
+          await send(content, {
             auth: {
               authenticator: "wassist",
               principalType: "user",
@@ -192,13 +267,27 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
               },
             },
             continuationToken: tokenFor(phoneNumber),
-            state: freshState(phoneNumber, replyCallback, conversationId),
+            state: freshState(
+              phoneNumber,
+              replyCallback,
+              conversationId,
+              deliveryKey,
+            ),
             title: `WhatsApp ${phoneNumber}`,
           });
 
-          const outcome = await waitForTurnSettlement(session);
-          if (outcome === "timeout" && replyCallback) {
-            // Channel events may not have flushed; last-resort patient-visible message.
+          const outcome = await Promise.race([
+            delivery,
+            new Promise<"timeout">((resolve) => {
+              setTimeout(() => resolve("timeout"), DELIVERY_TIMEOUT_MS);
+            }),
+          ]);
+
+          if (
+            outcome === "timeout" &&
+            replyCallback &&
+            abandonDelivery(deliveryKey)
+          ) {
             try {
               await sendViaCallback(replyCallback, {
                 content:
@@ -221,6 +310,7 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         service: "steadfast-wassist",
         webhook: "/webhook",
         authConfigured: Boolean(process.env.WASSIST_WEBHOOK_SECRET),
+        modelConfigured: hasModelCredentials(),
       }),
     ),
   ],
@@ -261,6 +351,7 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         await flushOutbound(channel);
       } catch (err) {
         console.error("[wassist] turn.completed delivery failed", err);
+        signalDelivery(channel.state.deliveryKey, "failed");
       }
     },
 
@@ -273,20 +364,22 @@ export default defineChannel<WassistState, WassistCtx, WassistTarget>({
         `Sorry — ${detail}. Please try again in a moment. If you feel unwell, contact your clinician or emergency services.`,
       ];
       try {
-        await flushOutbound(channel);
+        await flushOutbound(channel, { outcome: "failed" });
       } catch (err) {
         console.error("[wassist] turn.failed delivery failed", err);
+        signalDelivery(channel.state.deliveryKey, "failed");
       }
     },
 
-    async "session.failed"(eventData, channel) {
+    async "session.failed"(_eventData, channel) {
       channel.state.pendingTexts = [
         "Sorry — I'm having trouble right now. Please try again shortly. If this is urgent, contact your clinician or emergency services.",
       ];
       try {
-        await flushOutbound(channel);
+        await flushOutbound(channel, { outcome: "failed" });
       } catch (err) {
         console.error("[wassist] session.failed delivery failed", err);
+        signalDelivery(channel.state.deliveryKey, "failed");
       }
     },
   },

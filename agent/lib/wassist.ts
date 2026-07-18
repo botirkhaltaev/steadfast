@@ -57,12 +57,20 @@ async function postJson(url: string, body: unknown): Promise<Response> {
 
 /**
  * Deliver via reply_callback (valid within the WhatsApp 24h window).
- * Tries unified rich content first, then legacy shape — buttons preserved in both.
+ * Prefer simple `{ content }` (BYOA docs), then unified rich content, then legacy.
+ * Buttons/images require unified or legacy.
  */
 export async function sendViaCallback(
   replyCallback: string,
   payload: WassistOutbound,
 ): Promise<void> {
+  const hasRich = Boolean(payload.buttons?.length || payload.imageUrl);
+
+  if (!hasRich) {
+    const simple = await postJson(replyCallback, { content: payload.content });
+    if (simple.ok) return;
+  }
+
   const primary = await postJson(replyCallback, buildUnified(payload));
   if (primary.ok) return;
 
